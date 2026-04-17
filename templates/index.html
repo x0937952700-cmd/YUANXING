@@ -1,202 +1,28 @@
-
-<!DOCTYPE html>
-<html lang="zh-Hant">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>沅興木業｜智慧倉庫系統</title>
-<link rel="stylesheet" href="/static/style.css" />
-</head>
-<body>
-<div class="app-shell">
+{% extends 'base.html' %}
+{% set title = '沅興木業' %}
+{% block body %}
+<main class="home-shell">
   <header class="topbar">
-    <div class="brand-wrap">
-      <div class="eyebrow">AI OCR 智慧辨識 + 倉庫定位 + 出貨管理</div>
-      <h1 class="brand">沅興木業</h1>
-    </div>
+    <div></div>
     <div class="top-actions">
-      <div class="user-pill" id="userPill"></div>
-      <button class="icon-btn" id="openSettingsBtn">設定</button>
-      <button class="icon-btn light" id="logoutBtn">登出</button>
+      <a class="ghost-btn icon-btn" href="{{ url_for('settings_page') }}" target="_blank" rel="noopener">設定</a>
+      <button class="ghost-btn icon-btn" id="logout-btn">登出</button>
     </div>
   </header>
 
-  <nav class="nav-grid">
-    <button class="nav-card active" data-page="inventory">庫存</button>
-    <button class="nav-card" data-page="orders">訂單</button>
-    <button class="nav-card" data-page="master">總單</button>
-    <button class="nav-card" data-page="ship">出貨</button>
-    <button class="nav-card" data-page="shipping">出貨查詢</button>
-    <button class="nav-card" data-page="warehouse">倉庫圖</button>
-    <button class="nav-card" data-page="customers">客戶資料</button>
-  </nav>
+  <section class="hero">
+    <h1 class="brand-title">沅興木業</h1>
+    <p class="brand-sub">AI OCR 智慧辨識 × 倉庫定位 × 訂單管理 × 出貨扣庫存</p>
+  </section>
 
-  <main>
-    <section class="page active" id="page-home">
-      <div class="home-panel">
-        <div class="home-hero">
-          <div>
-            <div class="hero-sub">商業級操作介面</div>
-            <div class="hero-title">手機拍照 / 相簿上傳 / OCR / 人工修正 / 自動學習</div>
-          </div>
-          <div class="hero-tags"><span>防超賣</span><span>多格位</span><span>多人同步</span><span>操作紀錄</span></div>
-        </div>
-        <div class="quick-cards">
-          <div class="quick-card">首頁只保留你要的六大功能與客戶資料</div>
-          <div class="quick-card">登入後自動記住帳號，支援手動改密碼</div>
-          <div class="quick-card">倉庫圖、客戶分類、訂單/總單/出貨可直接編輯</div>
-        </div>
-      </div>
-    </section>
-
-    <section class="page" id="page-inventory">
-      <div class="section-header"><h2>庫存</h2><p>拍照或相簿上傳後自動 OCR，確認送出即建立庫存並顯示商品清單。</p></div>
-      <div class="workflow-card">
-        <div class="upload-row">
-          <label class="file-btn">上傳檔案（相簿 / 拍照）<input type="file" id="inventoryFile" accept="image/*" capture="environment" hidden></label>
-          <button class="ghost-btn" data-refresh="inventory">重新整理</button>
-        </div>
-        <div class="status-row"><span class="pill" id="inventoryMode">模式：庫存</span><span class="pill" id="inventoryConfidence">信心值：0%</span><span class="pill warn" id="inventoryWarn">尚未上傳</span></div>
-        <div class="grid-two">
-          <div><label>客戶名稱</label><input id="inventoryCustomer" placeholder="可選"></div>
-          <div><label>倉庫格位 / 預設位置</label><input id="inventoryLocation" placeholder="例如：A後排01"></div>
-        </div>
-        <label>OCR 文字框（可直接修改）</label>
-        <textarea id="inventoryText" placeholder="辨識後文字會出現在這裡，可人工修正"></textarea>
-        <div class="actions"><button class="primary-btn" data-submit="inventory">確認送出</button><button class="secondary-btn" data-locate="inventory">反查商品位置</button></div>
-        <div class="result-box" id="inventoryResult"></div>
-        <div class="sub-title">庫存商品清單</div>
-        <div class="list-box" id="inventoryList"></div>
-      </div>
-    </section>
-
-    <section class="page" id="page-orders">
-      <div class="section-header"><h2>訂單</h2><p>上傳後顯示客戶分類，客戶可拖曳分類，點選可編輯電話、地址與特殊要求。</p></div>
-      <div class="workflow-card">
-        <div class="upload-row">
-          <label class="file-btn">上傳檔案（相簿 / 拍照）<input type="file" id="ordersFile" accept="image/*" capture="environment" hidden></label>
-          <button class="ghost-btn" data-refresh="orders">重新整理</button>
-        </div>
-        <div class="status-row"><span class="pill" id="ordersMode">模式：訂單</span><span class="pill" id="ordersConfidence">信心值：0%</span><span class="pill warn" id="ordersWarn">尚未上傳</span></div>
-        <div class="grid-two">
-          <div><label>客戶名稱</label><input id="ordersCustomer" placeholder="例如：德馨"></div>
-          <div><label>訂單狀態</label><input value="pending" disabled></div>
-        </div>
-        <label>OCR 文字框（可直接修改）</label>
-        <textarea id="ordersText" placeholder="辨識後文字會出現在這裡，可人工修正"></textarea>
-        <div class="actions"><button class="primary-btn" data-submit="orders">確認送出</button><button class="secondary-btn" data-locate="orders">反查商品位置</button></div>
-        <div class="result-box" id="ordersResult"></div>
-        <div class="sub-title">客戶分類</div>
-        <div class="customer-panels" id="customerPanels"></div>
-      </div>
-    </section>
-
-    <section class="page" id="page-master">
-      <div class="section-header"><h2>總單</h2><p>同客戶自動合併，數量累加，適合總表管理。</p></div>
-      <div class="workflow-card">
-        <div class="upload-row">
-          <label class="file-btn">上傳檔案（相簿 / 拍照）<input type="file" id="masterFile" accept="image/*" capture="environment" hidden></label>
-          <button class="ghost-btn" data-refresh="master">重新整理</button>
-        </div>
-        <div class="status-row"><span class="pill" id="masterMode">模式：總單</span><span class="pill" id="masterConfidence">信心值：0%</span><span class="pill warn" id="masterWarn">尚未上傳</span></div>
-        <div class="grid-two">
-          <div><label>客戶名稱</label><input id="masterCustomer" placeholder="例如：德馨"></div>
-          <div><label>合併模式</label><input value="同客戶合併 / 數量累加" disabled></div>
-        </div>
-        <label>OCR 文字框（可直接修改）</label>
-        <textarea id="masterText" placeholder="辨識後文字會出現在這裡，可人工修正"></textarea>
-        <div class="actions"><button class="primary-btn" data-submit="master">確認送出</button><button class="secondary-btn" data-locate="master">反查商品位置</button></div>
-        <div class="result-box" id="masterResult"></div>
-      </div>
-    </section>
-
-    <section class="page" id="page-ship">
-      <div class="section-header"><h2>出貨</h2><p>先扣總單，再扣訂單，最後扣庫存，若不足會自動回滾。</p></div>
-      <div class="workflow-card">
-        <div class="upload-row">
-          <label class="file-btn">上傳檔案（相簿 / 拍照）<input type="file" id="shipFile" accept="image/*" capture="environment" hidden></label>
-          <button class="ghost-btn" data-refresh="ship">重新整理</button>
-        </div>
-        <div class="status-row"><span class="pill" id="shipMode">模式：出貨</span><span class="pill" id="shipConfidence">信心值：0%</span><span class="pill warn" id="shipWarn">尚未上傳</span></div>
-        <div class="grid-two">
-          <div><label>客戶名稱</label><input id="shipCustomer" placeholder="例如：德馨"></div>
-          <div><label>出貨前確認</label><input value="需要再次確認" disabled></div>
-        </div>
-        <label>OCR 文字框（可直接修改）</label>
-        <textarea id="shipText" placeholder="辨識後文字會出現在這裡，可人工修正"></textarea>
-        <div class="actions"><button class="primary-btn danger" data-submit="ship">確認送出</button><button class="secondary-btn" data-locate="ship">反查商品位置</button></div>
-        <div class="result-box" id="shipResult"></div>
-      </div>
-    </section>
-
-    <section class="page" id="page-shipping">
-      <div class="section-header"><h2>出貨查詢</h2><p>查詢客戶、商品、數量、出貨時間、操作人員與扣除來源。</p></div>
-      <div class="workflow-card">
-        <div class="actions"><button class="ghost-btn" id="refreshShipping">重新整理</button></div>
-        <div class="table-wrap">
-          <table class="data-table">
-            <thead><tr><th>客戶</th><th>商品</th><th>數量</th><th>操作人員</th><th>時間</th><th>來源</th></tr></thead>
-            <tbody id="shippingTable"></tbody>
-          </table>
-        </div>
-      </div>
-    </section>
-
-    <section class="page" id="page-warehouse">
-      <div class="section-header"><h2>倉庫圖</h2><p>可自訂格位、新增或刪除小格子，點擊查看客戶、商品與數量。</p></div>
-      <div class="workflow-card">
-        <div class="actions"><button class="ghost-btn" id="addWarehouseSlot">新增格位</button><button class="ghost-btn" id="refreshWarehouse">重新整理</button></div>
-        <div class="warehouse-layout" id="warehouseLayout"></div>
-      </div>
-    </section>
-
-    <section class="page" id="page-customers">
-      <div class="section-header"><h2>客戶資料</h2><p>顯示客戶名稱、電話、地址、特殊要求，皆可手動編輯。</p></div>
-      <div class="workflow-card">
-        <div class="actions"><button class="ghost-btn" id="refreshCustomers">重新整理</button><button class="ghost-btn" id="addCustomer">新增客戶</button></div>
-        <div class="customer-panels compact" id="customerPanelsFull"></div>
-      </div>
-    </section>
-  </main>
-</div>
-
-<div class="modal hidden" id="settingsModal">
-  <div class="modal-card">
-    <div class="modal-head"><h3>設定 / 更改密碼</h3><button class="icon-btn light" data-close="settingsModal">關閉</button></div>
-    <div class="grid-two">
-      <div><label>舊密碼</label><input type="password" id="oldPassword" placeholder="舊密碼"></div>
-      <div><label>新密碼</label><input type="password" id="newPassword" placeholder="新密碼"></div>
-    </div>
-    <div class="actions"><button class="primary-btn" id="savePasswordBtn">儲存密碼</button></div>
-    <div class="sub-title">其他設定</div>
-    <div class="settings-grid" id="settingsGrid"></div>
-  </div>
-</div>
-
-<div class="modal hidden" id="customerModal">
-  <div class="modal-card large">
-    <div class="modal-head"><h3 id="customerModalTitle">編輯客戶</h3><button class="icon-btn light" data-close="customerModal">關閉</button></div>
-    <div class="grid-two"><div><label>客戶名稱</label><input id="customerName"></div><div><label>區域</label><select id="customerRegion"><option>北區</option><option>中區</option><option>南區</option></select></div></div>
-    <div class="grid-two"><div><label>電話</label><input id="customerPhone"></div><div><label>排序</label><input id="customerSort" type="number"></div></div>
-    <label>地址</label><input id="customerAddress">
-    <label>特殊要求</label><textarea id="customerNotes"></textarea>
-    <div class="actions"><button class="primary-btn" id="saveCustomerBtn">儲存客戶資料</button></div>
-    <div class="sub-title">此客戶商品</div>
-    <div class="list-box" id="customerProducts"></div>
-  </div>
-</div>
-
-<div class="modal hidden" id="warehouseModal">
-  <div class="modal-card large">
-    <div class="modal-head"><h3>編輯倉庫格位</h3><button class="icon-btn light" data-close="warehouseModal">關閉</button></div>
-    <div class="grid-two"><div><label>格位名稱</label><input id="slotName"></div><div><label>客戶名稱</label><input id="slotCustomer"></div></div>
-    <div class="grid-two"><div><label>商品</label><input id="slotProduct"></div><div><label>數量</label><input id="slotQty" type="number"></div></div>
-    <label>備註</label><textarea id="slotNote"></textarea>
-    <div class="actions"><button class="primary-btn" id="saveSlotBtn">儲存格位</button><button class="secondary-btn" id="deleteSlotBtn">刪除格位</button></div>
-  </div>
-</div>
-
-<input type="hidden" id="currentPage" value="inventory" />
-<script src="/static/app.js"></script>
-</body>
-</html>
+  <section class="home-menu">
+    <a class="menu-btn" href="{{ url_for('inventory_page') }}" target="_blank" rel="noopener">庫存</a>
+    <a class="menu-btn" href="{{ url_for('order_page') }}" target="_blank" rel="noopener">訂單</a>
+    <a class="menu-btn" href="{{ url_for('master_order_page') }}" target="_blank" rel="noopener">總單</a>
+    <a class="menu-btn" href="{{ url_for('ship_page') }}" target="_blank" rel="noopener">出貨</a>
+    <a class="menu-btn" href="{{ url_for('shipping_records_page') }}" target="_blank" rel="noopener">出貨查詢</a>
+    <a class="menu-btn" href="{{ url_for('warehouse_page') }}" target="_blank" rel="noopener">倉庫圖</a>
+    <a class="menu-btn" href="{{ url_for('customers_page') }}" target="_blank" rel="noopener">客戶資料</a>
+  </section>
+</main>
+{% endblock %}

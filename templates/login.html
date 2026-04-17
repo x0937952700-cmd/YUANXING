@@ -1,51 +1,24 @@
+{% extends 'base.html' %}
+{% set title = '沅興木業｜登入' %}
+{% block body %}
+<main class="auth-shell">
+  <section class="auth-card glass">
+    <div class="brand-mark">沅興木業</div>
+    <h1>員工登入</h1>
+    <p class="muted">手機可直接登入，支援永久登入與自動回填。</p>
 
-<!DOCTYPE html>
-<html lang="zh-Hant">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>沅興木業｜登入</title>
-<link rel="stylesheet" href="/static/style.css" />
-</head>
-<body class="login-body">
-  <div class="login-card">
-    <div class="eyebrow">AI OCR 智慧辨識 + 倉庫定位 + 出貨管理</div>
-    <h1 class="login-brand">沅興木業</h1>
-    <p class="login-desc">登入後自動記住帳號，支援手機與電腦同步使用。</p>
-    <label>員工姓名 / 帳號</label>
-    <input id="loginName" placeholder="輸入員工姓名" />
-    <label>密碼</label>
-    <input id="loginPassword" type="password" placeholder="第一次登入可直接建立帳號" />
-    <button class="primary-btn full" id="loginBtn">登入</button>
-    <div class="login-msg" id="loginMsg"></div>
-  </div>
-<script>
-const savedName = localStorage.getItem("username") || "";
-const savedPass = localStorage.getItem("password") || "";
-document.getElementById("loginName").value = savedName;
-document.getElementById("loginPassword").value = savedPass;
-async function doLogin() {
-  const username = document.getElementById("loginName").value.trim();
-  const password = document.getElementById("loginPassword").value.trim();
-  const msg = document.getElementById("loginMsg");
-  msg.textContent = "";
-  if (!username || !password) { msg.textContent = "請輸入帳號與密碼"; return; }
-  try {
-    const res = await fetch("/api/login", {
-      method: "POST",
-      headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({username, password})
-    });
-    const data = await res.json();
-    if (data.success) {
-      localStorage.setItem("username", username);
-      localStorage.setItem("password", password);
-      location.href = "/";
-    } else msg.textContent = data.error || "登入失敗";
-  } catch (e) { msg.textContent = "網路錯誤"; }
-}
-document.getElementById("loginBtn").addEventListener("click", doLogin);
-document.getElementById("loginPassword").addEventListener("keydown", e => { if (e.key === "Enter") doLogin(); });
-</script>
-</body>
-</html>
+    <div class="form-stack">
+      <label>帳號</label>
+      <input id="login-username" type="text" placeholder="請輸入員工姓名" autocomplete="username" />
+
+      <label>密碼</label>
+      <input id="login-password" type="password" placeholder="請輸入密碼" autocomplete="current-password" />
+
+      <label class="check-row"><input id="remember-me" type="checkbox" checked /> 記住登入狀態</label>
+
+      <button class="primary-btn" id="login-btn">登入系統</button>
+      <div class="msg" id="login-msg"></div>
+    </div>
+  </section>
+</main>
+{% endblock %}
