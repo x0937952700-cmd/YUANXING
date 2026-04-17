@@ -90,31 +90,141 @@ def _ensure_column(cur, table, column, coltype):
             pass
 
 
-def _ensure_row(cur, area, column_index, slot_type, slot_number):
-    select_sql = sql("""
-        SELECT id
-        FROM warehouse_cells
-        WHERE area = ? AND column_index = ? AND slot_type = ? AND slot_number = ?
-    """)
-    cur.execute(select_sql, (area, column_index, slot_type, slot_number))
-    row = cur.fetchone()
-    if row:
-        return
+def _warehouse_columns(cur):
+    cols = _table_columns(cur, "warehouse_cells")
+    return cols
 
-    insert_sql = sql("""
-        INSERT INTO warehouse_cells(
-            area, column_index, slot_type, slot_number, items_json, note, updated_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """)
-    cur.execute(
-        insert_sql,
-        (area, column_index, slot_type, slot_number, "[]", "", now()),
-    )
+
+def _warehouse_keys(area, col, slot_type, slot_number):
+    return {
+        "area": area,
+        "col_no": col,
+        "column_index": col,
+        "row_type": slot_type,
+        "slot_type": slot_type,
+        "slot_number": slot_number,
+    }
+
+
+def _warehouse_where_clause(cur):
+    cols = _warehouse_columns(cur)
+    parts = []
+    params = []
+    key_map = {
+        "area": None,
+        "col_no": None,
+        "column_index": None,
+        "row_type": None,
+        "slot_type": None,
+        "slot_number": None,
+    }
+    for c in key_map:
+        if c in cols:
+            parts.append(f"{c} = ?")
+            key_map[c] = c
+    return parts, key_map
+
+
+def _warehouse_select_one(cur, area, col, slot_type, slot_number):
+    cols = _warehouse_columns(cur)
+    where = []
+    params = []
+    values = _warehouse_keys(area, col, slot_type, slot_number)
+
+    for c in ("area", "col_no", "column_index", "row_type", "slot_type", "slot_number"):
+        if c in cols:
+            where.append(f"{c} = ?")
+            params.append(values[c])
+
+    q = "SELECT * FROM warehouse_cells"
+    if where:
+        q += " WHERE " + " AND ".join(where)
+    cur.execute(sql(q), tuple(params))
+    return fetchone_dict(cur)
+
+
+def _warehouse_upsert_row(cur, area, col, slot_type, slot_number, items_json="[]", note=""):
+    cols = _warehouse_columns(cur)
+    values = _warehouse_keys(area, col, slot_type, slot_number)
+
+    insert_cols = []
+    insert_vals = []
+    for c in ("area", "col_no", "column_index", "row_type", "slot_type", "slot_number", "items_json", "note", "updated_at"):
+        if c in cols:
+            insert_cols.append(c)
+            if c == "items_json":
+                insert_vals.append(items_json)
+            elif c == "note":
+                insert_vals.append(note)
+            elif c == "updated_at":
+                insert_vals.append(now())
+            else:
+                insert_vals.append(values[c])
+
+    # If the table already exists but has nullable legacy columns, try to backfill first.
+    # This helps older Render databases that were created before schema changes.
+    if "col_no" in cols and "column_index" in cols:
+        try:
+            cur.execute(sql("""
+                UPDATE warehouse_cells
+                SET col_no = COALESCE(col_no, column_index)
+                WHERE col_no IS NULL
+            """))
+        except Exception:
+            pass
+    if "row_type" in cols and "slot_type" in cols:
+        try:
+            cur.execute(sql("""
+                UPDATE warehouse_cells
+                SET row_type = COALESCE(row_type, slot_type)
+                WHERE row_type IS NULL
+            """))
+        except Exception:
+            pass
+
+    if USE_POSTGRES:
+        conflict_cols = []
+        for c in ("area", "col_no", "column_index", "row_type", "slot_type", "slot_number"):
+            if c in cols:
+                conflict_cols.append(c)
+
+        if conflict_cols:
+            conflict = ", ".join(conflict_cols)
+            update_set = []
+            for c in ("items_json", "note", "updated_at"):
+                if c in cols:
+                    update_set.append(f"{c} = EXCLUDED.{c}")
+            if update_set:
+                q = f"""
+                    INSERT INTO warehouse_cells({', '.join(insert_cols)})
+                    VALUES ({', '.join(['%s'] * len(insert_cols))})
+                    ON CONFLICT ({conflict})
+                    DO UPDATE SET {', '.join(update_set)}
+                """
+            else:
+                q = f"""
+                    INSERT INTO warehouse_cells({', '.join(insert_cols)})
+                    VALUES ({', '.join(['%s'] * len(insert_cols))})
+                    ON CONFLICT ({conflict}) DO NOTHING
+                """
+            cur.execute(q, tuple(insert_vals))
+        else:
+            cur.execute(
+                f"""
+                    INSERT INTO warehouse_cells({', '.join(insert_cols)})
+                    VALUES ({', '.join(['%s'] * len(insert_cols))})
+                """,
+                tuple(insert_vals),
+            )
+    else:
+        q = f"""
+            INSERT OR IGNORE INTO warehouse_cells({', '.join(insert_cols)})
+            VALUES ({', '.join(['?'] * len(insert_cols))})
+        """
+        cur.execute(q, tuple(insert_vals))
 
 
 def _migrate_schema(cur):
-    # Bring legacy databases up to the current schema without data loss.
     needed = {
         "users": [("updated_at", "TEXT")],
         "customer_profiles": [
@@ -142,7 +252,9 @@ def _migrate_schema(cur):
         "errors": [("created_at", "TEXT")],
         "warehouse_cells": [
             ("area", "TEXT"),
+            ("col_no", "INTEGER"),
             ("column_index", "INTEGER"),
+            ("row_type", "TEXT"),
             ("slot_type", "TEXT"),
             ("slot_number", "INTEGER"),
             ("items_json", "TEXT"),
@@ -154,6 +266,24 @@ def _migrate_schema(cur):
     for table, columns in needed.items():
         for column, coltype in columns:
             _ensure_column(cur, table, column, coltype)
+
+    # Backfill warehouse legacy columns if they exist.
+    try:
+        cols = _table_columns(cur, "warehouse_cells")
+        if "col_no" in cols and "column_index" in cols:
+            cur.execute(sql("""
+                UPDATE warehouse_cells
+                SET col_no = COALESCE(col_no, column_index)
+                WHERE col_no IS NULL
+            """))
+        if "row_type" in cols and "slot_type" in cols:
+            cur.execute(sql("""
+                UPDATE warehouse_cells
+                SET row_type = COALESCE(row_type, slot_type)
+                WHERE row_type IS NULL
+            """))
+    except Exception:
+        pass
 
 
 def log_error(source, message):
@@ -267,13 +397,15 @@ def init_db():
         f"""CREATE TABLE IF NOT EXISTS warehouse_cells (
             id {pk},
             area {text} NOT NULL,
-            column_index INTEGER NOT NULL,
+            col_no INTEGER,
+            column_index INTEGER,
+            row_type {text},
             slot_type {text} NOT NULL,
             slot_number INTEGER NOT NULL,
             items_json {text},
             note {text},
             updated_at {text},
-            UNIQUE(area, column_index, slot_type, slot_number)
+            UNIQUE(area, slot_type, slot_number)
         )""",
     ]
 
@@ -282,12 +414,12 @@ def init_db():
 
     _migrate_schema(cur)
 
-    # Seed warehouse cells
+    # Seed warehouse cells for both current and legacy schemas.
     for area in ("A", "B"):
         for col in range(1, 7):
             for slot_type in ("front", "back"):
                 for num in range(1, 11):
-                    _ensure_row(cur, area, col, slot_type, num)
+                    _warehouse_upsert_row(cur, area, col, slot_type, num, "[]", "")
 
     conn.commit()
     conn.close()
@@ -747,7 +879,7 @@ def get_shipping_records(start_date=None, end_date=None):
 def warehouse_get_cells():
     conn = get_db()
     cur = conn.cursor()
-    cur.execute(sql("SELECT * FROM warehouse_cells ORDER BY area, column_index, slot_type, slot_number"))
+    cur.execute(sql("SELECT * FROM warehouse_cells ORDER BY area, COALESCE(col_no, column_index), slot_type, slot_number"))
     rows = rows_to_dict(cur)
     conn.close()
     return rows
@@ -756,13 +888,32 @@ def warehouse_get_cells():
 def warehouse_get_cell(area, column_index, slot_type, slot_number):
     conn = get_db()
     cur = conn.cursor()
-    cur.execute(
-        sql("""
-            SELECT * FROM warehouse_cells
-            WHERE area = ? AND column_index = ? AND slot_type = ? AND slot_number = ?
-        """),
-        (area, column_index, slot_type, slot_number),
-    )
+    cols = _warehouse_columns(cur)
+    where = []
+    params = []
+    values = _warehouse_keys(area, column_index, slot_type, slot_number)
+    if "area" in cols:
+        where.append("area = ?")
+        params.append(values["area"])
+    if "col_no" in cols:
+        where.append("col_no = ?")
+        params.append(values["col_no"])
+    if "column_index" in cols:
+        where.append("column_index = ?")
+        params.append(values["column_index"])
+    if "row_type" in cols:
+        where.append("row_type = ?")
+        params.append(values["row_type"])
+    if "slot_type" in cols:
+        where.append("slot_type = ?")
+        params.append(values["slot_type"])
+    if "slot_number" in cols:
+        where.append("slot_number = ?")
+        params.append(values["slot_number"])
+    q = "SELECT * FROM warehouse_cells"
+    if where:
+        q += " WHERE " + " AND ".join(where)
+    cur.execute(sql(q), tuple(params))
     row = fetchone_dict(cur)
     conn.close()
     return row
@@ -772,14 +923,46 @@ def warehouse_save_cell(area, column_index, slot_type, slot_number, items, note=
     conn = get_db()
     cur = conn.cursor()
     items_json = json.dumps(items, ensure_ascii=False)
-    cur.execute(
-        sql("""
-            UPDATE warehouse_cells
-            SET items_json = ?, note = ?, updated_at = ?
-            WHERE area = ? AND column_index = ? AND slot_type = ? AND slot_number = ?
-        """),
-        (items_json, note, now(), area, column_index, slot_type, slot_number),
-    )
+    cols = _warehouse_columns(cur)
+    sets = []
+    params = []
+
+    if "items_json" in cols:
+        sets.append("items_json = ?")
+        params.append(items_json)
+    if "note" in cols:
+        sets.append("note = ?")
+        params.append(note)
+    if "updated_at" in cols:
+        sets.append("updated_at = ?")
+        params.append(now())
+
+    where = []
+    values = _warehouse_keys(area, column_index, slot_type, slot_number)
+    if "area" in cols:
+        where.append("area = ?")
+        params.append(values["area"])
+    if "col_no" in cols:
+        where.append("col_no = ?")
+        params.append(values["col_no"])
+    if "column_index" in cols:
+        where.append("column_index = ?")
+        params.append(values["column_index"])
+    if "row_type" in cols:
+        where.append("row_type = ?")
+        params.append(values["row_type"])
+    if "slot_type" in cols:
+        where.append("slot_type = ?")
+        params.append(values["slot_type"])
+    if "slot_number" in cols:
+        where.append("slot_number = ?")
+        params.append(values["slot_number"])
+
+    q = "UPDATE warehouse_cells SET " + ", ".join(sets)
+    if where:
+        q += " WHERE " + " AND ".join(where)
+
+    cur.execute(sql(q), tuple(params))
     conn.commit()
     conn.close()
 
@@ -790,14 +973,7 @@ def warehouse_move_item(from_key, to_key, product_text, qty):
     try:
         def _load(key):
             area, column_index, slot_type, slot_number = key
-            cur.execute(
-                sql("""
-                    SELECT * FROM warehouse_cells
-                    WHERE area = ? AND column_index = ? AND slot_type = ? AND slot_number = ?
-                """),
-                (area, column_index, slot_type, slot_number),
-            )
-            return fetchone_dict(cur)
+            return warehouse_get_cell(area, column_index, slot_type, slot_number)
 
         src = _load(from_key)
         dst = _load(to_key)
@@ -824,22 +1000,9 @@ def warehouse_move_item(from_key, to_key, product_text, qty):
 
         dst_items.extend(moved)
 
-        cur.execute(
-            sql("""
-                UPDATE warehouse_cells
-                SET items_json = ?, updated_at = ?
-                WHERE area = ? AND column_index = ? AND slot_type = ? AND slot_number = ?
-            """),
-            (json.dumps(new_src, ensure_ascii=False), now(), *from_key),
-        )
-        cur.execute(
-            sql("""
-                UPDATE warehouse_cells
-                SET items_json = ?, updated_at = ?
-                WHERE area = ? AND column_index = ? AND slot_type = ? AND slot_number = ?
-            """),
-            (json.dumps(dst_items, ensure_ascii=False), now(), *to_key),
-        )
+        warehouse_save_cell(from_key[0], from_key[1], from_key[2], from_key[3], new_src)
+        warehouse_save_cell(to_key[0], to_key[1], to_key[2], to_key[3], dst_items)
+
         conn.commit()
         return {"success": True}
     except Exception as e:
@@ -886,10 +1049,10 @@ def warehouse_summary():
     cells = warehouse_get_cells()
     zones = {"A": {}, "B": {}}
     for cell in cells:
-        area = cell["area"]
-        col = int(cell["column_index"])
-        slot_type = cell["slot_type"]
-        num = int(cell["slot_number"])
+        area = cell.get("area", "A")
+        col = int(cell.get("col_no") or cell.get("column_index") or 0)
+        slot_type = cell.get("slot_type") or cell.get("row_type") or "front"
+        num = int(cell.get("slot_number") or 0)
         zones.setdefault(area, {}).setdefault(col, {}).setdefault(slot_type, {})[num] = cell
     return zones
 
