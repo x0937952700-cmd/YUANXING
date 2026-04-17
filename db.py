@@ -1,747 +1,690 @@
-import json
-import os
-import sqlite3
-from contextlib import contextmanager
-from datetime import datetime
 
-DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///warehouse.db')
-USE_POSTGRES = DATABASE_URL.startswith('postgres')
+import os
+import json
+import sqlite3
+from datetime import datetime
+from contextlib import contextmanager
+
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///warehouse.db")
+USE_POSTGRES = DATABASE_URL.startswith("postgres")
 
 if USE_POSTGRES:
     import psycopg2
-    import psycopg2.extras
 
+def now():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-def now() -> str:
-    return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+def sql(query: str) -> str:
+    return query.replace("?", "%s") if USE_POSTGRES else query
 
-
-def sql(q: str) -> str:
-    return q.replace('?', '%s') if USE_POSTGRES else q
-
-
-def row_to_dict(row):
-    if row is None:
-        return None
-    if USE_POSTGRES:
-        return dict(row)
-    return dict(row)
-
-
-def rows_to_dicts(rows):
-    return [row_to_dict(r) for r in rows]
-
-
-def row_id(row):
-    if row is None:
-        return None
-    return row['id'] if not USE_POSTGRES else row[0] if not hasattr(row, 'keys') else row.get('id', row[0])
-
-
-@contextmanager
-def db_conn():
-    conn = get_db()
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-
-
-def _table_columns(conn, table):
-    cur = conn.cursor()
-    if USE_POSTGRES:
-        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name=%s", (table,))
-        return {r[0] if not hasattr(r, 'keys') else r['column_name'] for r in cur.fetchall()}
-    cur.execute(f'PRAGMA table_info({table})')
-    return {r[1] for r in cur.fetchall()}
-
-
-def _ensure_column(conn, table, column, col_def):
-    cols = _table_columns(conn, table)
-    if column in cols:
-        return
-    cur = conn.cursor()
-    if USE_POSTGRES:
-        cur.execute(f'ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_def}')
-    else:
-        cur.execute(f'ALTER TABLE {table} ADD COLUMN {column} {col_def}')
-
-
-def _ensure_table_columns(conn):
-    # Backward-compatible migrations for older deployments.
-    specs = {
-        'users': {
-            'created_at': 'TEXT',
-            'updated_at': 'TEXT',
-        },
-        'inventory': {
-            'quantity': 'INTEGER DEFAULT 0',
-            'location': "TEXT DEFAULT ''",
-            'operator': "TEXT DEFAULT ''",
-            'updated_at': 'TEXT',
-        },
-        'orders': {
-            'shipped_qty': 'INTEGER DEFAULT 0',
-            'status': "TEXT DEFAULT 'pending'",
-            'operator': "TEXT DEFAULT ''",
-            'created_at': 'TEXT',
-            'updated_at': 'TEXT',
-        },
-        'master_orders': {
-            'operator': "TEXT DEFAULT ''",
-            'created_at': 'TEXT',
-            'updated_at': 'TEXT',
-        },
-        'shipping_records': {
-            'deduction_detail': "TEXT DEFAULT ''",
-            'operator': "TEXT DEFAULT ''",
-            'created_at': 'TEXT',
-            'shipped_at': 'TEXT',
-        },
-        'corrections': {
-            'updated_at': 'TEXT',
-        },
-        'image_hashes': {
-            'created_at': 'TEXT',
-        },
-        'logs': {
-            'username': "TEXT DEFAULT ''",
-            'created_at': 'TEXT',
-        },
-        'errors': {
-            'created_at': 'TEXT',
-        },
-        'customers': {
-            'region': "TEXT DEFAULT '未分類'",
-            'phone': "TEXT DEFAULT ''",
-            'address': "TEXT DEFAULT ''",
-            'special_requirements': "TEXT DEFAULT ''",
-            'sort_order': 'INTEGER DEFAULT 0',
-            'created_at': 'TEXT',
-            'updated_at': 'TEXT',
-        },
-        'warehouse_cells': {
-            'area': "TEXT DEFAULT 'A'",
-            'col_no': 'INTEGER DEFAULT 1',
-            'position': "TEXT DEFAULT 'front'",
-            'label': "TEXT DEFAULT ''",
-            'customer_name': "TEXT DEFAULT ''",
-            'product': "TEXT DEFAULT ''",
-            'quantity': 'INTEGER DEFAULT 0',
-            'note': "TEXT DEFAULT ''",
-            'updated_at': 'TEXT',
-        },
-    }
-    for table, cols in specs.items():
-        existing = _table_columns(conn, table)
-        if not existing:
-            continue
-        for column, col_def in cols.items():
-            if column not in existing:
-                _ensure_column(conn, table, column, col_def)
-
+def _sqlite_path():
+    return DATABASE_URL.replace("sqlite:///", "")
 
 def get_db():
     if USE_POSTGRES:
         conn = psycopg2.connect(DATABASE_URL)
         conn.autocommit = False
         return conn
-    path = DATABASE_URL.replace('sqlite:///', '')
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(_sqlite_path())
     conn.row_factory = sqlite3.Row
     return conn
 
+def row_to_dict(row):
+    if row is None:
+        return None
+    if USE_POSTGRES:
+        return row
+    return dict(row)
 
-def init_db():
-    conn = get_db()
-    cur = conn.cursor()
-    pk = 'SERIAL PRIMARY KEY' if USE_POSTGRES else 'INTEGER PRIMARY KEY AUTOINCREMENT'
-    text_type = 'TEXT'
-    int_type = 'INTEGER'
+def rows_to_dict(cur):
+    if USE_POSTGRES:
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, r)) for r in cur.fetchall()]
+    return [dict(r) for r in cur.fetchall()]
 
-    tables = [
-        f'''CREATE TABLE IF NOT EXISTS users (
-            id {pk},
-            username {text_type} UNIQUE NOT NULL,
-            password {text_type} NOT NULL,
-            created_at {text_type},
-            updated_at {text_type}
-        )''',
-        f'''CREATE TABLE IF NOT EXISTS inventory (
-            id {pk},
-            product {text_type} NOT NULL,
-            quantity {int_type} DEFAULT 0,
-            location {text_type} DEFAULT '',
-            operator {text_type} DEFAULT '',
-            updated_at {text_type}
-        )''',
-        f'''CREATE TABLE IF NOT EXISTS orders (
-            id {pk},
-            customer {text_type} NOT NULL,
-            product {text_type} NOT NULL,
-            qty {int_type} DEFAULT 0,
-            shipped_qty {int_type} DEFAULT 0,
-            status {text_type} DEFAULT 'pending',
-            operator {text_type} DEFAULT '',
-            created_at {text_type},
-            updated_at {text_type}
-        )''',
-        f'''CREATE TABLE IF NOT EXISTS master_orders (
-            id {pk},
-            customer {text_type} NOT NULL,
-            product {text_type} NOT NULL,
-            qty {int_type} DEFAULT 0,
-            operator {text_type} DEFAULT '',
-            updated_at {text_type}
-        )''',
-        f'''CREATE TABLE IF NOT EXISTS shipping_records (
-            id {pk},
-            customer {text_type} NOT NULL,
-            product {text_type} NOT NULL,
-            qty {int_type} DEFAULT 0,
-            operator {text_type} DEFAULT '',
-            deduction_detail {text_type} DEFAULT '',
-            shipped_at {text_type}
-        )''',
-        f'''CREATE TABLE IF NOT EXISTS corrections (
-            id {pk},
-            wrong_text {text_type} UNIQUE NOT NULL,
-            correct_text {text_type} NOT NULL,
-            updated_at {text_type}
-        )''',
-        f'''CREATE TABLE IF NOT EXISTS image_hashes (
-            id {pk},
-            image_hash {text_type} UNIQUE NOT NULL,
-            created_at {text_type}
-        )''',
-        f'''CREATE TABLE IF NOT EXISTS logs (
-            id {pk},
-            username {text_type} DEFAULT '',
-            action {text_type} NOT NULL,
-            created_at {text_type}
-        )''',
-        f'''CREATE TABLE IF NOT EXISTS errors (
-            id {pk},
-            source {text_type} NOT NULL,
-            message {text_type} NOT NULL,
-            created_at {text_type}
-        )''',
-        f'''CREATE TABLE IF NOT EXISTS customers (
-            id {pk},
-            name {text_type} UNIQUE NOT NULL,
-            region {text_type} DEFAULT '未分類',
-            phone {text_type} DEFAULT '',
-            address {text_type} DEFAULT '',
-            special_requirements {text_type} DEFAULT '',
-            sort_order {int_type} DEFAULT 0,
-            created_at {text_type},
-            updated_at {text_type}
-        )''',
-        f'''CREATE TABLE IF NOT EXISTS warehouse_cells (
-            id {pk},
-            area {text_type} NOT NULL,
-            col_no {int_type} NOT NULL,
-            position {text_type} NOT NULL,
-            label {text_type} DEFAULT '',
-            customer_name {text_type} DEFAULT '',
-            product {text_type} DEFAULT '',
-            quantity {int_type} DEFAULT 0,
-            note {text_type} DEFAULT '',
-            updated_at {text_type},
-            UNIQUE(area, col_no, position)
-        )''',
-    ]
+def row_id(row):
+    if row is None:
+        return None
+    return row[0] if USE_POSTGRES else row["id"]
 
-    for t in tables:
-        cur.execute(t)
-
-    _ensure_table_columns(conn)
-
-    # seed a few blank cells so the warehouse page has structure on first run
-    for area in ('A', 'B'):
-        for col_no in range(1, 13):
-            for position in ('front', 'back'):
-                if USE_POSTGRES:
-                    cur.execute(
-                        '''INSERT INTO warehouse_cells(area, col_no, position, label, updated_at)
-                           VALUES(%s, %s, %s, %s, %s)
-                           ON CONFLICT (area, col_no, position) DO NOTHING''',
-                        (area, col_no, position, f'{area}{col_no}-{position}', now()),
-                    )
-                else:
-                    cur.execute(
-                        '''INSERT OR IGNORE INTO warehouse_cells(area, col_no, position, label, updated_at)
-                           VALUES(?,?,?,?,?)''',
-                        (area, col_no, position, f'{area}{col_no}-{position}', now()),
-                    )
-
-    conn.commit()
-    conn.close()
-
-
-# ---------------- users ----------------
-
-def get_user(username):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(sql('SELECT * FROM users WHERE username=?'), (username,))
+def fetchone_dict(cur):
     row = cur.fetchone()
-    conn.close()
-    return row_to_dict(row)
-
-
-def create_user(username, password):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(sql('INSERT INTO users(username, password, created_at, updated_at) VALUES(?,?,?,?)'),
-                (username, password, now(), now()))
-    conn.commit()
-    conn.close()
-
-
-def update_password(username, old_password, new_password):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(sql('SELECT password FROM users WHERE username=?'), (username,))
-    row = cur.fetchone()
-    if not row:
-        conn.close()
-        return False, '找不到帳號'
-    current = row[0] if USE_POSTGRES else row['password']
-    if current != old_password:
-        conn.close()
-        return False, '舊密碼錯誤'
-    cur.execute(sql('UPDATE users SET password=?, updated_at=? WHERE username=?'), (new_password, now(), username))
-    conn.commit()
-    conn.close()
-    return True, '密碼已更新'
-
-
-# ---------------- logs ----------------
-
-def log_action(username, action):
-    try:
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute(sql('INSERT INTO logs(username, action, created_at) VALUES(?,?,?)'), (username or '', action, now()))
-        conn.commit()
-        conn.close()
-    except Exception:
-        pass
-
+    if row is None:
+        return None
+    if USE_POSTGRES:
+        cols = [d[0] for d in cur.description]
+        return dict(zip(cols, row))
+    return dict(row)
 
 def log_error(source, message):
     try:
         conn = get_db()
         cur = conn.cursor()
-        cur.execute(sql('INSERT INTO errors(source, message, created_at) VALUES(?,?,?)'), (source, str(message), now()))
+        cur.execute(sql("""
+            INSERT INTO errors(source, message, created_at)
+            VALUES (?, ?, ?)
+        """), (source, str(message), now()))
         conn.commit()
         conn.close()
     except Exception:
         pass
 
+def init_db():
+    conn = get_db()
+    cur = conn.cursor()
+    pk = "SERIAL PRIMARY KEY" if USE_POSTGRES else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    text = "TEXT"
+    tables = [
+        f"""CREATE TABLE IF NOT EXISTS users (
+            id {pk},
+            username {text} UNIQUE NOT NULL,
+            password {text} NOT NULL,
+            created_at {text},
+            updated_at {text}
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS customer_profiles (
+            id {pk},
+            name {text} UNIQUE NOT NULL,
+            phone {text},
+            address {text},
+            notes {text},
+            region {text},
+            created_at {text},
+            updated_at {text}
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS inventory (
+            id {pk},
+            product_text {text} NOT NULL,
+            product_code {text},
+            qty INTEGER DEFAULT 0,
+            location {text},
+            customer_name {text},
+            operator {text},
+            source_text {text},
+            created_at {text},
+            updated_at {text}
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS orders (
+            id {pk},
+            customer_name {text} NOT NULL,
+            product_text {text} NOT NULL,
+            product_code {text},
+            qty INTEGER DEFAULT 0,
+            status {text} DEFAULT 'pending',
+            operator {text},
+            created_at {text},
+            updated_at {text}
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS master_orders (
+            id {pk},
+            customer_name {text} NOT NULL,
+            product_text {text} NOT NULL,
+            product_code {text},
+            qty INTEGER DEFAULT 0,
+            operator {text},
+            created_at {text},
+            updated_at {text}
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS shipping_records (
+            id {pk},
+            customer_name {text} NOT NULL,
+            product_text {text} NOT NULL,
+            product_code {text},
+            qty INTEGER DEFAULT 0,
+            operator {text},
+            shipped_at {text},
+            note {text}
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS corrections (
+            id {pk},
+            wrong_text {text} UNIQUE NOT NULL,
+            correct_text {text} NOT NULL,
+            updated_at {text}
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS image_hashes (
+            id {pk},
+            image_hash {text} UNIQUE NOT NULL,
+            created_at {text}
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS logs (
+            id {pk},
+            username {text},
+            action {text},
+            created_at {text}
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS errors (
+            id {pk},
+            source {text},
+            message {text},
+            created_at {text}
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS warehouse_cells (
+            id {pk},
+            zone {text} NOT NULL,
+            column_index INTEGER NOT NULL,
+            slot_type {text} NOT NULL,
+            slot_number INTEGER NOT NULL,
+            items_json {text},
+            note {text},
+            updated_at {text},
+            UNIQUE(zone, column_index, slot_type, slot_number)
+        )""",
+    ]
+    for t in tables:
+        cur.execute(t)
+    for zone in ("A", "B"):
+        for col in range(1, 7):
+            for slot_type in ("front", "back"):
+                for num in range(1, 11):
+                    if USE_POSTGRES:
+                        cur.execute("""
+                            INSERT INTO warehouse_cells(zone, column_index, slot_type, slot_number, items_json, note, updated_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (zone, column_index, slot_type, slot_number) DO NOTHING
+                        """, (zone, col, slot_type, num, "[]", "", now()))
+                    else:
+                        cur.execute("""
+                            INSERT OR IGNORE INTO warehouse_cells(zone, column_index, slot_type, slot_number, items_json, note, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, (zone, col, slot_type, num, "[]", "", now()))
+    conn.commit()
+    conn.close()
 
-# ---------------- corrections / OCR ----------------
+def get_user(username):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(sql("SELECT * FROM users WHERE username = ?"), (username,))
+    row = fetchone_dict(cur)
+    conn.close()
+    return row
+
+def create_user(username, password):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(sql("""
+        INSERT INTO users(username, password, created_at, updated_at)
+        VALUES (?, ?, ?, ?)
+    """), (username, password, now(), now()))
+    conn.commit()
+    conn.close()
+
+def update_password(username, new_password):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(sql("""
+        UPDATE users SET password = ?, updated_at = ?
+        WHERE username = ?
+    """), (new_password, now(), username))
+    conn.commit()
+    conn.close()
+
+def log_action(username, action):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(sql("""
+        INSERT INTO logs(username, action, created_at)
+        VALUES (?, ?, ?)
+    """), (username, action, now()))
+    conn.commit()
+    conn.close()
 
 def image_hash_exists(image_hash):
     conn = get_db()
     cur = conn.cursor()
-    cur.execute(sql('SELECT id FROM image_hashes WHERE image_hash=?'), (image_hash,))
+    cur.execute(sql("SELECT id FROM image_hashes WHERE image_hash = ?"), (image_hash,))
     row = cur.fetchone()
     conn.close()
     return row is not None
 
-
 def save_image_hash(image_hash):
     conn = get_db()
     cur = conn.cursor()
-    if USE_POSTGRES:
-        cur.execute('''INSERT INTO image_hashes(image_hash, created_at)
-                       VALUES(%s, %s)
-                       ON CONFLICT (image_hash) DO NOTHING''', (image_hash, now()))
-    else:
-        cur.execute('''INSERT OR IGNORE INTO image_hashes(image_hash, created_at)
-                       VALUES(?, ?)''', (image_hash, now()))
-    conn.commit()
+    try:
+        if USE_POSTGRES:
+            cur.execute("""
+                INSERT INTO image_hashes(image_hash, created_at)
+                VALUES (%s, %s)
+                ON CONFLICT (image_hash) DO NOTHING
+            """, (image_hash, now()))
+        else:
+            cur.execute("""
+                INSERT OR IGNORE INTO image_hashes(image_hash, created_at)
+                VALUES (?, ?)
+            """, (image_hash, now()))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        log_error("save_image_hash", e)
     conn.close()
-
 
 def save_correction(wrong, correct):
     conn = get_db()
     cur = conn.cursor()
-    cur.execute(sql('DELETE FROM corrections WHERE wrong_text=?'), (wrong,))
-    cur.execute(sql('INSERT INTO corrections(wrong_text, correct_text, updated_at) VALUES(?,?,?)'), (wrong, correct, now()))
+    if USE_POSTGRES:
+        cur.execute("""
+            INSERT INTO corrections(wrong_text, correct_text, updated_at)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (wrong_text) DO UPDATE SET correct_text = EXCLUDED.correct_text, updated_at = EXCLUDED.updated_at
+        """, (wrong, correct, now()))
+    else:
+        cur.execute("""
+            INSERT INTO corrections(wrong_text, correct_text, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(wrong_text) DO UPDATE SET correct_text=excluded.correct_text, updated_at=excluded.updated_at
+        """, (wrong, correct, now()))
     conn.commit()
     conn.close()
-
 
 def get_corrections():
     conn = get_db()
     cur = conn.cursor()
-    cur.execute('SELECT wrong_text, correct_text FROM corrections')
-    rows = cur.fetchall()
+    cur.execute(sql("SELECT wrong_text, correct_text FROM corrections"))
+    rows = rows_to_dict(cur)
     conn.close()
-    return {r[0] if USE_POSTGRES else r['wrong_text']: r[1] if USE_POSTGRES else r['correct_text'] for r in rows}
+    return {r["wrong_text"]: r["correct_text"] for r in rows}
 
-
-def get_known_products():
+def upsert_customer(name, phone="", address="", notes="", region="北區"):
     conn = get_db()
     cur = conn.cursor()
-    cur.execute('SELECT DISTINCT product FROM inventory WHERE product IS NOT NULL AND product<>""')
-    rows = cur.fetchall()
-    conn.close()
-    return [r[0] if USE_POSTGRES else r['product'] for r in rows]
-
-
-# ---------------- inventory ----------------
-
-def save_inventory(item):
-    product = (item.get('product') or '').strip()
-    qty = int(item.get('quantity') or 0)
-    location = (item.get('location') or '').strip()
-    operator = (item.get('operator') or '').strip()
-    if not product or qty <= 0:
-        return
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(sql('SELECT id FROM inventory WHERE product=? AND location=?'), (product, location))
-    row = cur.fetchone()
-    if row:
-        _id = row[0] if USE_POSTGRES else row['id']
-        cur.execute(sql('UPDATE inventory SET quantity=quantity+?, operator=?, updated_at=? WHERE id=?'), (qty, operator, now(), _id))
+    if USE_POSTGRES:
+        cur.execute("""
+            INSERT INTO customer_profiles(name, phone, address, notes, region, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT(name) DO UPDATE SET phone=EXCLUDED.phone, address=EXCLUDED.address, notes=EXCLUDED.notes, region=EXCLUDED.region, updated_at=EXCLUDED.updated_at
+        """, (name, phone, address, notes, region, now(), now()))
     else:
-        cur.execute(sql('INSERT INTO inventory(product, quantity, location, operator, updated_at) VALUES(?,?,?,?,?)'),
-                    (product, qty, location, operator, now()))
+        cur.execute("""
+            INSERT INTO customer_profiles(name, phone, address, notes, region, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET phone=excluded.phone, address=excluded.address, notes=excluded.notes, region=excluded.region, updated_at=excluded.updated_at
+        """, (name, phone, address, notes, region, now(), now()))
     conn.commit()
     conn.close()
 
+def get_customers():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(sql("SELECT * FROM customer_profiles ORDER BY region, name"))
+    rows = rows_to_dict(cur)
+    conn.close()
+    return rows
+
+def get_customer(name):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(sql("SELECT * FROM customer_profiles WHERE name = ?"), (name,))
+    row = fetchone_dict(cur)
+    conn.close()
+    return row
+
+def save_inventory_item(product_text, product_code, qty, location="", customer_name="", operator="", source_text=""):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(sql("""
+        SELECT id, qty FROM inventory
+        WHERE product_text = ? AND COALESCE(location, '') = COALESCE(?, '')
+    """), (product_text, location))
+    row = cur.fetchone()
+    if row:
+        rid = row[0] if USE_POSTGRES else row["id"]
+        cur.execute(sql("""
+            UPDATE inventory
+            SET qty = qty + ?, product_code = ?, customer_name = ?, operator = ?, source_text = ?, updated_at = ?
+            WHERE id = ?
+        """), (qty, product_code, customer_name, operator, source_text, now(), rid))
+    else:
+        cur.execute(sql("""
+            INSERT INTO inventory(product_text, product_code, qty, location, customer_name, operator, source_text, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """), (product_text, product_code, qty, location, customer_name, operator, source_text, now(), now()))
+    conn.commit()
+    conn.close()
 
 def list_inventory():
     conn = get_db()
     cur = conn.cursor()
-    cur.execute(sql('SELECT * FROM inventory ORDER BY product ASC, location ASC, id DESC'))
-    rows = rows_to_dicts(cur.fetchall())
-    cur.execute(sql('SELECT product, customer_name, label, area, col_no, position FROM warehouse_cells WHERE quantity > 0 OR product <> '' OR customer_name <> '''))
-    placements = rows_to_dicts(cur.fetchall())
+    cur.execute(sql("SELECT * FROM inventory ORDER BY updated_at DESC, id DESC"))
+    rows = rows_to_dict(cur)
     conn.close()
-
-    for row in rows:
-        product = (row.get('product') or '').strip()
-        matched = []
-        for cell in placements:
-            if not product:
-                continue
-            cell_product = (cell.get('product') or '').strip()
-            cell_customer = (cell.get('customer_name') or '').strip()
-            cell_label = (cell.get('label') or '').strip()
-            if product == cell_product or product == cell_customer or product in cell_product or product in cell_label:
-                matched.append(f"{cell.get('area', '')}{cell.get('col_no', '')}{('前' if cell.get('position') == 'front' else '後')}")
-        row['warehouse_locations'] = matched
-        row['is_placed'] = bool(matched)
     return rows
 
-
-# ---------------- orders ----------------
-
-def save_order(customer, items, operator):
-    customer = (customer or '').strip()
+def save_order(customer_name, items, operator):
     conn = get_db()
     cur = conn.cursor()
-    saved = []
-    for item in items or []:
-        product = (item.get('product') or '').strip()
-        qty = int(item.get('quantity') or 0)
-        if not product or qty <= 0:
-            continue
-        cur.execute(sql('''INSERT INTO orders(customer, product, qty, shipped_qty, status, operator, created_at, updated_at)
-                           VALUES(?,?,?,?,?,?,?,?)'''),
-                    (customer, product, qty, 0, 'pending', operator, now(), now()))
-        saved.append({'product': product, 'qty': qty})
+    for item in items:
+        cur.execute(sql("""
+            INSERT INTO orders(customer_name, product_text, product_code, qty, status, operator, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)
+        """), (customer_name, item["product_text"], item.get("product_code", ""), int(item["qty"]), operator, now(), now()))
     conn.commit()
     conn.close()
-    return saved
 
-
-def save_master_order(customer, items, operator):
-    customer = (customer or '').strip()
+def save_master_order(customer_name, items, operator):
     conn = get_db()
     cur = conn.cursor()
-    saved = []
-    for item in items or []:
-        product = (item.get('product') or '').strip()
-        qty = int(item.get('quantity') or 0)
-        if not product or qty <= 0:
-            continue
-        cur.execute(sql('SELECT id FROM master_orders WHERE customer=? AND product=?'), (customer, product))
+    for item in items:
+        cur.execute(sql("""
+            SELECT id FROM master_orders WHERE customer_name = ? AND product_text = ?
+        """), (customer_name, item["product_text"]))
         row = cur.fetchone()
         if row:
-            _id = row[0] if USE_POSTGRES else row['id']
-            cur.execute(sql('UPDATE master_orders SET qty=qty+?, operator=?, updated_at=? WHERE id=?'), (qty, operator, now(), _id))
+            rid = row[0] if USE_POSTGRES else row["id"]
+            cur.execute(sql("""
+                UPDATE master_orders SET qty = qty + ?, product_code = ?, operator = ?, updated_at = ?
+                WHERE id = ?
+            """), (int(item["qty"]), item.get("product_code", ""), operator, now(), rid))
         else:
-            cur.execute(sql('INSERT INTO master_orders(customer, product, qty, operator, updated_at) VALUES(?,?,?,?,?)'),
-                        (customer, product, qty, operator, now()))
-        saved.append({'product': product, 'qty': qty})
+            cur.execute(sql("""
+                INSERT INTO master_orders(customer_name, product_text, product_code, qty, operator, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """), (customer_name, item["product_text"], item.get("product_code", ""), int(item["qty"]), operator, now(), now()))
     conn.commit()
     conn.close()
-    return saved
 
-
-def list_orders():
+def get_orders():
     conn = get_db()
     cur = conn.cursor()
-    cur.execute(sql('SELECT * FROM orders ORDER BY id DESC'))
-    rows = rows_to_dicts(cur.fetchall())
+    cur.execute(sql("SELECT * FROM orders ORDER BY id DESC"))
+    rows = rows_to_dict(cur)
     conn.close()
     return rows
 
-
-def list_master_orders():
+def get_master_orders():
     conn = get_db()
     cur = conn.cursor()
-    cur.execute(sql('SELECT * FROM master_orders ORDER BY customer ASC, product ASC, id DESC'))
-    rows = rows_to_dicts(cur.fetchall())
+    cur.execute(sql("SELECT * FROM master_orders ORDER BY id DESC"))
+    rows = rows_to_dict(cur)
     conn.close()
     return rows
 
+def _deduct_from_table(cur, table, customer_name, product_text, qty_needed):
+    cur.execute(sql(f"""
+        SELECT id, qty
+        FROM {table}
+        WHERE customer_name = ? AND product_text = ? AND qty > 0
+        ORDER BY id ASC
+    """), (customer_name, product_text))
+    rows = cur.fetchall()
+    total = 0
+    for row in rows:
+        total += row[1] if USE_POSTGRES else row["qty"]
+    if total < qty_needed:
+        return False, []
+    remain = qty_needed
+    used = []
+    for row in rows:
+        rid = row[0] if USE_POSTGRES else row["id"]
+        stock = row[1] if USE_POSTGRES else row["qty"]
+        use_qty = min(stock, remain)
+        cur.execute(sql(f"""
+            UPDATE {table}
+            SET qty = qty - ?, updated_at = ?
+            WHERE id = ?
+        """), (use_qty, now(), rid))
+        used.append({"id": rid, "qty": use_qty})
+        remain -= use_qty
+        if remain <= 0:
+            break
+    return True, used
 
-def ship_order(customer, items, operator):
-    customer = (customer or '').strip()
+def _deduct_from_inventory(cur, product_text, qty_needed):
+    cur.execute(sql("""
+        SELECT id, qty
+        FROM inventory
+        WHERE product_text = ? AND qty > 0
+        ORDER BY qty DESC, id ASC
+    """), (product_text,))
+    rows = cur.fetchall()
+    total = sum((r[1] if USE_POSTGRES else r["qty"]) for r in rows)
+    if total < qty_needed:
+        return False, []
+    remain = qty_needed
+    used = []
+    for row in rows:
+        rid = row[0] if USE_POSTGRES else row["id"]
+        stock = row[1] if USE_POSTGRES else row["qty"]
+        use_qty = min(stock, remain)
+        cur.execute(sql("""
+            UPDATE inventory SET qty = qty - ?, updated_at = ? WHERE id = ?
+        """), (use_qty, now(), rid))
+        used.append({"id": rid, "qty": use_qty})
+        remain -= use_qty
+        if remain <= 0:
+            break
+    return True, used
+
+def ship_order(customer_name, items, operator):
     conn = get_db()
     cur = conn.cursor()
-    details = []
     try:
-        for item in items or []:
-            product = (item.get('product') or '').strip()
-            qty_needed = int(item.get('quantity') or 0)
-            if not product or qty_needed <= 0:
-                continue
+        breakdown = []
+        for item in items:
+            product_text = item["product_text"]
+            qty_needed = int(item["qty"])
 
-            remaining = qty_needed
-            steps = []
+            ok1, used_master = _deduct_from_table(cur, "master_orders", customer_name, product_text, qty_needed)
+            if not ok1:
+                conn.rollback()
+                return {"success": False, "error": f"{product_text} 總單庫存不足"}
 
-            # 1) deduct from master orders
-            cur.execute(sql('SELECT id, qty FROM master_orders WHERE customer=? AND product=? ORDER BY id ASC'), (customer, product))
-            master_rows = cur.fetchall()
-            for r in master_rows:
-                mid = r[0] if USE_POSTGRES else r['id']
-                available = r[1] if USE_POSTGRES else r['qty']
-                if remaining <= 0:
-                    break
-                take = min(available, remaining)
-                if take > 0:
-                    cur.execute(sql('UPDATE master_orders SET qty=qty-?, updated_at=? WHERE id=?'), (take, now(), mid))
-                    remaining -= take
-                    steps.append(f'總單-{take}')
+            ok2, used_order = _deduct_from_table(cur, "orders", customer_name, product_text, qty_needed)
+            if not ok2:
+                conn.rollback()
+                return {"success": False, "error": f"{product_text} 訂單庫存不足"}
 
-            # 2) deduct from orders
-            if remaining > 0:
-                cur.execute(sql('SELECT id, qty, shipped_qty FROM orders WHERE customer=? AND product=? AND status IN (?, ?, ?) ORDER BY id ASC'),
-                            (customer, product, 'pending', 'partial', 'processing'))
-                order_rows = cur.fetchall()
-                for r in order_rows:
-                    oid = r[0] if USE_POSTGRES else r['id']
-                    qty = r[1] if USE_POSTGRES else r['qty']
-                    shipped_qty = r[2] if USE_POSTGRES else r['shipped_qty']
-                    available = max(int(qty) - int(shipped_qty), 0)
-                    if remaining <= 0:
-                        break
-                    take = min(available, remaining)
-                    if take > 0:
-                        new_shipped = int(shipped_qty) + take
-                        new_status = 'shipped' if new_shipped >= int(qty) else 'partial'
-                        cur.execute(sql('UPDATE orders SET shipped_qty=?, status=?, updated_at=? WHERE id=?'),
-                                    (new_shipped, new_status, now(), oid))
-                        remaining -= take
-                        steps.append(f'訂單-{take}')
+            ok3, used_inv = _deduct_from_inventory(cur, product_text, qty_needed)
+            if not ok3:
+                conn.rollback()
+                return {"success": False, "error": f"{product_text} 庫存不足"}
 
-            # 3) deduct from inventory
-            if remaining > 0:
-                cur.execute(sql('SELECT id, quantity FROM inventory WHERE product=? AND quantity>0 ORDER BY quantity DESC, id ASC'), (product,))
-                inv_rows = cur.fetchall()
-                total_stock = 0
-                for r in inv_rows:
-                    total_stock += r[1] if USE_POSTGRES else r['quantity']
-                if total_stock < remaining:
-                    raise ValueError(f'{product} 庫存不足')
-                for r in inv_rows:
-                    if remaining <= 0:
-                        break
-                    iid = r[0] if USE_POSTGRES else r['id']
-                    stock = r[1] if USE_POSTGRES else r['quantity']
-                    take = min(stock, remaining)
-                    if take > 0:
-                        cur.execute(sql('UPDATE inventory SET quantity=quantity-?, updated_at=? WHERE id=?'), (take, now(), iid))
-                        remaining -= take
-                        steps.append(f'庫存-{take}')
+            cur.execute(sql("""
+                INSERT INTO shipping_records(customer_name, product_text, product_code, qty, operator, shipped_at, note)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """), (customer_name, product_text, item.get("product_code", ""), qty_needed, operator, now(), "已出貨"))
 
-            deduction_detail = ' / '.join(steps) if steps else '無扣除'
-            cur.execute(sql('''INSERT INTO shipping_records(customer, product, qty, operator, deduction_detail, shipped_at)
-                               VALUES(?,?,?,?,?,?)'''),
-                        (customer, product, qty_needed, operator, deduction_detail, now()))
-            details.append({'customer': customer, 'product': product, 'qty': qty_needed, 'detail': deduction_detail})
-
+            breakdown.append({
+                "product_text": product_text,
+                "qty": qty_needed,
+                "master_deduct": qty_needed,
+                "order_deduct": qty_needed,
+                "inventory_deduct": qty_needed
+            })
         conn.commit()
-        return {'success': True, 'details': details, 'message': '出貨成功'}
+        return {"success": True, "breakdown": breakdown}
     except Exception as e:
         conn.rollback()
-        log_error('ship_order', e)
-        return {'success': False, 'error': str(e) or '出貨失敗'}
+        log_error("ship_order", e)
+        return {"success": False, "error": "出貨失敗"}
     finally:
         conn.close()
 
-
-def get_shipping_records(days=None):
+def get_shipping_records(start_date=None, end_date=None):
     conn = get_db()
     cur = conn.cursor()
-    if days:
+    q = "SELECT * FROM shipping_records WHERE 1=1"
+    params = []
+    if start_date:
+        q += " AND date(shipped_at) >= date(?)"
+        params.append(start_date)
+    if end_date:
+        q += " AND date(shipped_at) <= date(?)"
+        params.append(end_date)
+    q += " ORDER BY id DESC"
+    cur.execute(sql(q), tuple(params))
+    rows = rows_to_dict(cur)
+    conn.close()
+    return rows
+
+def warehouse_get_cells():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(sql("SELECT * FROM warehouse_cells ORDER BY zone, column_index, slot_type, slot_number"))
+    rows = rows_to_dict(cur)
+    conn.close()
+    return rows
+
+def warehouse_get_cell(zone, column_index, slot_type, slot_number):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(sql("""
+        SELECT * FROM warehouse_cells
+        WHERE zone = ? AND column_index = ? AND slot_type = ? AND slot_number = ?
+    """), (zone, column_index, slot_type, slot_number))
+    row = fetchone_dict(cur)
+    conn.close()
+    return row
+
+def warehouse_save_cell(zone, column_index, slot_type, slot_number, items, note=""):
+    conn = get_db()
+    cur = conn.cursor()
+    items_json = json.dumps(items, ensure_ascii=False)
+    cur.execute(sql("""
+        UPDATE warehouse_cells
+        SET items_json = ?, note = ?, updated_at = ?
+        WHERE zone = ? AND column_index = ? AND slot_type = ? AND slot_number = ?
+    """), (items_json, note, now(), zone, column_index, slot_type, slot_number))
+    conn.commit()
+    conn.close()
+
+def warehouse_move_item(from_key, to_key, product_text, qty):
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        def _load(key):
+            zone, column_index, slot_type, slot_number = key
+            cur.execute(sql("""
+                SELECT * FROM warehouse_cells
+                WHERE zone = ? AND column_index = ? AND slot_type = ? AND slot_number = ?
+            """), (zone, column_index, slot_type, slot_number))
+            return fetchone_dict(cur)
+        src = _load(from_key)
+        dst = _load(to_key)
+        src_items = json.loads(src["items_json"] or "[]")
+        dst_items = json.loads(dst["items_json"] or "[]")
+        moved = []
+        remain = qty
+        new_src = []
+        for it in src_items:
+            if it.get("product_text") == product_text and remain > 0:
+                take = min(int(it.get("qty", 0)), remain)
+                remain -= take
+                moved.append({**it, "qty": take})
+                leftover = int(it.get("qty", 0)) - take
+                if leftover > 0:
+                    new_src.append({**it, "qty": leftover})
+            else:
+                new_src.append(it)
+        if remain > 0:
+            return {"success": False, "error": "來源格位數量不足"}
+        dst_items.extend(moved)
+        cur.execute(sql("""
+            UPDATE warehouse_cells SET items_json = ?, updated_at = ?
+            WHERE zone = ? AND column_index = ? AND slot_type = ? AND slot_number = ?
+        """), (json.dumps(new_src, ensure_ascii=False), now(), *from_key))
+        cur.execute(sql("""
+            UPDATE warehouse_cells SET items_json = ?, updated_at = ?
+            WHERE zone = ? AND column_index = ? AND slot_type = ? AND slot_number = ?
+        """), (json.dumps(dst_items, ensure_ascii=False), now(), *to_key))
+        conn.commit()
+        return {"success": True}
+    except Exception as e:
+        conn.rollback()
+        log_error("warehouse_move_item", e)
+        return {"success": False, "error": "拖曳失敗"}
+    finally:
+        conn.close()
+
+def inventory_placements():
+    cells = warehouse_get_cells()
+    placement = {}
+    for cell in cells:
         try:
-            days = int(days)
+            items = json.loads(cell.get("items_json") or "[]")
         except Exception:
-            days = None
-    if days:
-        if USE_POSTGRES:
-            cur.execute(sql('SELECT * FROM shipping_records WHERE shipped_at >= (NOW() - INTERVAL \"1 day\" * ?) ORDER BY id DESC'), (days,))
-        else:
-            # sqlite date math with stored string values is harder; use python filter below
-            cur.execute(sql('SELECT * FROM shipping_records ORDER BY id DESC'))
-            rows = rows_to_dicts(cur.fetchall())
-            conn.close()
-            from datetime import datetime, timedelta
-            cutoff = datetime.now() - timedelta(days=days)
-            return [r for r in rows if r.get('shipped_at') and datetime.strptime(r['shipped_at'], '%Y-%m-%d %H:%M:%S') >= cutoff]
-    else:
-        cur.execute(sql('SELECT * FROM shipping_records ORDER BY id DESC'))
-    rows = rows_to_dicts(cur.fetchall())
-    conn.close()
-    return rows
+            items = []
+        for it in items:
+            key = it.get("product_text") or it.get("product") or ""
+            placement[key] = placement.get(key, 0) + int(it.get("qty", 0))
+    return placement
 
+def inventory_summary():
+    rows = list_inventory()
+    placement = inventory_placements()
+    result = []
+    for r in rows:
+        placed = placement.get(r["product_text"], 0)
+        qty = int(r.get("qty", 0))
+        result.append({
+            **r,
+            "placed_qty": placed,
+            "unplaced_qty": max(0, qty - placed),
+            "needs_red": max(0, qty - placed) > 0
+        })
+    return result
 
-# ---------------- customers ----------------
+def warehouse_summary():
+    cells = warehouse_get_cells()
+    zones = {"A": {}, "B": {}}
+    for cell in cells:
+        zone = cell["zone"]
+        col = int(cell["column_index"])
+        slot_type = cell["slot_type"]
+        num = int(cell["slot_number"])
+        zones.setdefault(zone, {}).setdefault(col, {}).setdefault(slot_type, {})[num] = cell
+    return zones
 
-def list_customers():
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(sql('SELECT * FROM customers ORDER BY region ASC, sort_order ASC, name ASC'))
-    rows = rows_to_dicts(cur.fetchall())
-    conn.close()
-    return rows
-
-
-def save_customer(customer):
-    name = (customer.get('name') or '').strip()
-    region = (customer.get('region') or '未分類').strip()
-    phone = (customer.get('phone') or '').strip()
-    address = (customer.get('address') or '').strip()
-    special_requirements = (customer.get('special_requirements') or '').strip()
-    sort_order = int(customer.get('sort_order') or 0)
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(sql('SELECT id FROM customers WHERE name=?'), (name,))
-    row = cur.fetchone()
-    if row:
-        cid = row[0] if USE_POSTGRES else row['id']
-        cur.execute(sql('''UPDATE customers SET region=?, phone=?, address=?, special_requirements=?, sort_order=?, updated_at=? WHERE id=?'''),
-                    (region, phone, address, special_requirements, sort_order, now(), cid))
-    else:
-        cur.execute(sql('''INSERT INTO customers(name, region, phone, address, special_requirements, sort_order, created_at, updated_at)
-                           VALUES(?,?,?,?,?,?,?,?)'''),
-                    (name, region, phone, address, special_requirements, sort_order, now(), now()))
-    conn.commit()
-    conn.close()
-
-
-def reorder_customers(region, ordered_names):
-    conn = get_db()
-    cur = conn.cursor()
-    for idx, name in enumerate(ordered_names or []):
-        cur.execute(sql('UPDATE customers SET sort_order=?, region=?, updated_at=? WHERE name=?'), (idx, region, now(), name))
-    conn.commit()
-    conn.close()
-
-
-def delete_customer(name):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(sql('DELETE FROM customers WHERE name=?'), (name,))
-    conn.commit()
-    conn.close()
-
-
-# ---------------- warehouse ----------------
-
-def list_warehouse_cells():
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(sql('SELECT * FROM warehouse_cells ORDER BY area ASC, col_no ASC, position ASC, id ASC'))
-    rows = rows_to_dicts(cur.fetchall())
-    conn.close()
-    return rows
-
-
-def upsert_warehouse_cell(cell):
-    area = (cell.get('area') or 'A').strip().upper()
-    col_no = int(cell.get('col_no') or 1)
-    position = (cell.get('position') or 'front').strip().lower()
-    label = (cell.get('label') or '').strip()
-    customer_name = (cell.get('customer_name') or '').strip()
-    product = (cell.get('product') or '').strip()
-    quantity = int(cell.get('quantity') or 0)
-    note = (cell.get('note') or '').strip()
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(sql('SELECT id FROM warehouse_cells WHERE area=? AND col_no=? AND position=?'), (area, col_no, position))
-    row = cur.fetchone()
-    if row:
-        cid = row[0] if USE_POSTGRES else row['id']
-        cur.execute(sql('''UPDATE warehouse_cells SET label=?, customer_name=?, product=?, quantity=?, note=?, updated_at=? WHERE id=?'''),
-                    (label, customer_name, product, quantity, note, now(), cid))
-    else:
-        cur.execute(sql('''INSERT INTO warehouse_cells(area, col_no, position, label, customer_name, product, quantity, note, updated_at)
-                           VALUES(?,?,?,?,?,?,?,?,?)'''),
-                    (area, col_no, position, label, customer_name, product, quantity, note, now()))
-    conn.commit()
-    conn.close()
-
-
-def delete_warehouse_cell(area, col_no, position):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(sql('DELETE FROM warehouse_cells WHERE area=? AND col_no=? AND position=?'), (area, int(col_no), position))
-    conn.commit()
-    conn.close()
-
-
-def find_multiple_locations(items):
-    conn = get_db()
-    cur = conn.cursor()
-    results = []
-    for item in items or []:
-        if isinstance(item, dict):
-            product = (item.get('product') or item.get('name') or '').strip()
-        else:
-            product = str(item).strip()
-        if not product:
-            continue
-        cur.execute(sql('SELECT product, location, quantity, operator, updated_at FROM inventory WHERE product LIKE ? AND quantity > 0 ORDER BY quantity DESC'), (f'%{product}%',))
-        for r in rows_to_dicts(cur.fetchall()):
-            results.append({
-                'product': r['product'],
-                'location': r.get('location', ''),
-                'quantity': r.get('quantity', 0),
-                'type': 'inventory',
+def list_backups():
+    import os
+    files = []
+    backup_dir = "backups"
+    if not os.path.isdir(backup_dir):
+        return {"success": True, "files": []}
+    for filename in os.listdir(backup_dir):
+        path = os.path.join(backup_dir, filename)
+        if os.path.isfile(path):
+            files.append({
+                "filename": filename,
+                "size": os.path.getsize(path),
+                "created_at": datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d %H:%M:%S")
             })
-        cur.execute(sql('SELECT area, col_no, position, label, customer_name, product, quantity, note, updated_at FROM warehouse_cells WHERE product LIKE ? OR customer_name LIKE ? OR label LIKE ? ORDER BY area ASC, col_no ASC, position ASC'), (f'%{product}%', f'%{product}%', f'%{product}%'))
-        for r in rows_to_dicts(cur.fetchall()):
-            results.append({
-                'product': r.get('product', ''),
-                'location': f"{r['area']}區 {r['col_no']}欄 {r['position']}",
-                'quantity': r.get('quantity', 0),
-                'customer_name': r.get('customer_name', ''),
-                'type': 'warehouse',
-            })
+    files.sort(key=lambda x: x["created_at"], reverse=True)
+    return {"success": True, "files": files}
+
+def get_activity_logs(limit=100, today_only=False, since=None):
+    conn = get_db()
+    cur = conn.cursor()
+    q = "SELECT * FROM logs WHERE 1=1"
+    params = []
+    if today_only:
+        q += " AND substr(created_at,1,10) = ?"
+        params.append(now()[:10])
+    if since:
+        q += " AND created_at > ?"
+        params.append(since)
+    q += " ORDER BY id DESC"
+    if limit:
+        q += " LIMIT ?"
+        params.append(int(limit))
+    cur.execute(sql(q), tuple(params))
+    rows = rows_to_dict(cur)
     conn.close()
-    return results
+    return rows
+
+
+def get_today_error_count():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(sql("SELECT COUNT(*) AS cnt FROM errors WHERE substr(created_at,1,10) = ?"), (now()[:10],))
+    row = fetchone_dict(cur)
+    conn.close()
+    return int((row or {}).get('cnt', 0))
+
+
+def get_today_shipping_qty():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(sql("SELECT COALESCE(SUM(qty),0) AS total FROM shipping_records WHERE substr(shipped_at,1,10) = ?"), (now()[:10],))
+    row = fetchone_dict(cur)
+    conn.close()
+    return int((row or {}).get('total', 0))
+

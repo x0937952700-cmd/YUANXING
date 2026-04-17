@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: yuanxing-warehouse
+    name: yuanxing
     runtime: python
     plan: free
     branch: main
@@ -9,15 +9,3 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.10
-      - key: FLASK_ENV
-        value: production
-      - key: SECRET_KEY
-        generateValue: true
-      - key: DATABASE_URL
-        fromDatabase:
-          name: yuanxing-db
-          property: connectionString
-
-databases:
-  - name: yuanxing-db
-    plan: free

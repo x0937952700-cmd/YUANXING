@@ -1,14 +1,24 @@
+
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title or '沅興木業' }}</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <script defer src="{{ url_for('static', filename='app.js') }}"></script>
+  <meta name="theme-color" content="#d6bf8f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="mobile-web-app-capable" content="yes">
+  <link rel="manifest" href="{{ url_for('manifest_webmanifest') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/apple-touch-icon.png') }}">
+  <link rel="icon" type="image/png" sizes="192x192" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+  <link rel="icon" type="image/png" sizes="512x512" href="{{ url_for('static', filename='icons/icon-512.png') }}">
 </head>
-<body data-page="{{ page_key or '' }}" data-user="{{ username or '' }}">
-  <div id="toast" class="toast" aria-live="polite"></div>
-  {% block body %}{% endblock %}
+<body>
+  <div class="page-shell">
+    {% block body %}{% endblock %}
+  </div>
 </body>
 </html>
