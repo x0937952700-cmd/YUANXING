@@ -1,77 +1,50 @@
-
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for, send_from_directory, Response
-from datetime import timedelta, datetime
-from functools import wraps
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for
+from datetime import timedelta
 import os
 import hashlib
 import json
 from PIL import Image
 
 from db import (
-    init_db, get_user, create_user, update_password, log_action,
-    save_inventory_item, list_inventory, save_order, save_master_order,
-    ship_order, get_shipping_records, save_correction, log_error,
-    save_image_hash, image_hash_exists, upsert_customer, get_customers,
-    get_customer, warehouse_get_cells, warehouse_save_cell, warehouse_move_item,
-    inventory_summary, warehouse_summary, list_backups, get_orders, get_master_orders,
-    get_activity_logs, get_today_error_count, get_today_shipping_qty,
-    row_to_dict, get_db, sql, rows_to_dict, fetchone_dict, now
+    init_db, now, today_str,
+    get_user, create_user, update_user_password,
+    log_action, add_notification, list_notifications, mark_notifications_read,
+    list_inventory, upsert_inventory,
+    save_order, list_orders, save_master_order, list_master_orders,
+    list_shipping_records, list_customers, update_customer, upsert_customer, suggest_customers,
+    save_warehouse_cell, delete_warehouse_cell, list_warehouse_cells, warehouse_search,
+    get_unplaced_products, dashboard_summary, reconciliation,
+    execute, query_all, query_one, save_correction
 )
-from ocr import process_ocr_text, parse_ocr_text
-from backup import run_daily_backup
+from ocr import process_ocr_text
+from backup import run_daily_backup, list_backups
 
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "warehouse-secret-key")
+app.secret_key = os.getenv("SECRET_KEY", "yuanxing-secret")
 app.permanent_session_lifetime = timedelta(days=30)
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 
 UPLOAD_FOLDER = "uploads"
-ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "heic", "gif"}
-MAX_UPLOAD_SIZE = 16 * 1024 * 1024
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_SIZE
 
+ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
+
+
+# ---------- init ----------
 init_db()
 
-PUBLIC_PATHS = {
-    "login", "api_login", "health", "static"
-}
-
-def current_username():
-    return session.get("user", "")
-
-def require_login():
-    return bool(current_username())
-
-def login_required_json(f):
-    @wraps(f)
-    def wrapper(*args, **kwargs):
-        if not require_login():
-            return jsonify(success=False, error="請先登入"), 401
-        return f(*args, **kwargs)
-    return wrapper
-
-@app.before_request
-def protect_pages():
-    path = request.path
-    if path.startswith("/static/") or path in ("/health",):
-        return None
-    public = [
-        "/login", "/api/login", "/api/health"
-    ]
-    if path in public:
-        return None
-    if not require_login() and path not in ("/",):
-        # Let / redirect to login
-        if path.startswith("/api/"):
-            return jsonify(success=False, error="請先登入"), 401
-        return redirect(url_for("login_page"))
-    return None
 
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def error_response(msg, code=400):
-    return jsonify({"success": False, "error": msg}), code
+
+def require_login():
+    return "user" in session
+
+
+def error_response(msg, status=400):
+    return jsonify({"success": False, "error": msg}), status
+
 
 def compress_image(path):
     try:
@@ -81,486 +54,604 @@ def compress_image(path):
         if img.width > 1800:
             ratio = 1800 / float(img.width)
             img = img.resize((1800, int(img.height * ratio)))
-        img.save(path, "JPEG", quality=78, optimize=True)
-    except Exception as e:
-        log_error("compress_image", str(e))
-
-def parse_lines_to_items(text):
-    parsed = parse_ocr_text(text)
-    return parsed["items"], parsed["text"]
-
-def grouped_inventory():
-    return inventory_summary()
-
-def customer_groups():
-    customers = get_customers()
-    groups = {"北區": [], "中區": [], "南區": []}
-    for c in customers:
-        region = c.get("region") or "北區"
-        if region not in groups:
-            region = "北區"
-        groups[region].append(c)
-    return groups
-
-@app.route('/manifest.webmanifest')
-def manifest_webmanifest():
-    return send_from_directory('static', 'manifest.webmanifest', mimetype='application/manifest+json')
-
-@app.route('/sw.js')
-def service_worker():
-    return send_from_directory('static', 'sw.js', mimetype='application/javascript')
+        img.save(path, "JPEG", quality=80, optimize=True)
+    except Exception:
+        pass
 
 
+def save_image_hash(image_hash):
+    row = query_one("SELECT id FROM image_hashes WHERE image_hash=?", (image_hash,))
+    if not row:
+        execute("INSERT INTO image_hashes(image_hash, created_at) VALUES(?,?)", (image_hash, now()))
+
+
+def image_hash_exists(image_hash):
+    return query_one("SELECT id FROM image_hashes WHERE image_hash=?", (image_hash,)) is not None
+
+
+def json_request():
+    try:
+        return request.get_json(force=True) or {}
+    except Exception:
+        return {}
+
+
+def redirect_login():
+    return redirect(url_for("login_page"))
+
+
+# ---------- pages ----------
 @app.route("/")
 def home():
     if not require_login():
-        return redirect(url_for("login_page"))
-    return render_template("index.html", username=current_username(), title="沅興木業")
+        return redirect_login()
+    summary = dashboard_summary()
+    return render_template(
+        "index.html",
+        user=session.get("user"),
+        summary=summary,
+        unread_notifications=summary.get("unread_notifications", 0),
+        title="沅興木業"
+    )
+
 
 @app.route("/login")
 def login_page():
     if require_login():
         return redirect(url_for("home"))
-    return render_template("login.html", title="登入")
+    return render_template("login.html", title="沅興木業登入")
 
-@app.route("/settings")
-def settings_page():
-    return render_template("settings.html", username=current_username(), title="設定")
 
-@app.route("/inventory")
-def inventory_page():
-    return render_template("module.html", module_key="inventory", title="庫存", username=current_username())
+@app.route("/module/<module_name>")
+def module_page(module_name):
+    if not require_login():
+        return redirect_login()
+    allowed = {"inventory", "orders", "master_orders", "shipping", "shipping_records", "warehouse", "customers", "today_changes"}
+    if module_name not in allowed:
+        return redirect(url_for("home"))
+    return render_template("module.html", module=module_name, user=session.get("user"), title="沅興木業")
 
-@app.route("/orders")
-def orders_page():
-    return render_template("module.html", module_key="orders", title="訂單", username=current_username())
 
-@app.route("/master-order")
-def master_order_page():
-    return render_template("module.html", module_key="master_order", title="總單", username=current_username())
-
-@app.route("/ship")
-def ship_page():
-    return render_template("module.html", module_key="ship", title="出貨", username=current_username())
-
-@app.route("/shipping-query")
-def shipping_query_page():
-    return render_template("module.html", module_key="shipping_query", title="出貨查詢", username=current_username())
-
-@app.route("/warehouse")
-def warehouse_page():
-    return render_template("module.html", module_key="warehouse", title="倉庫圖", username=current_username())
-
-@app.route("/customers")
-def customers_page():
-    return render_template("module.html", module_key="customers", title="客戶資料", username=current_username())
-
+# ---------- auth ----------
 @app.route("/api/login", methods=["POST"])
 def api_login():
-    try:
-        data = request.get_json(silent=True) or {}
-        username = (data.get("username") or data.get("name") or "").strip()
-        password = (data.get("password") or "").strip()
-        if not username or not password:
-            return error_response("帳號密碼不可空白")
-        user = get_user(username)
-        if not user:
-            create_user(username, password)
-            log_action(username, "建立帳號")
-        elif user["password"] != password:
-            return error_response("密碼錯誤")
-        session.permanent = True
-        session["user"] = username
-        log_action(username, "登入系統")
-        return jsonify(success=True, username=username)
-    except Exception as e:
-        log_error("api_login", str(e))
-        return error_response("登入失敗")
+    data = json_request()
+    username = (data.get("username") or data.get("name") or "").strip()
+    password = (data.get("password") or "").strip()
+    if not username or not password:
+        return error_response("帳號密碼不可空白")
+    user = get_user(username)
+    if not user:
+        create_user(username, password)
+        log_action(username, "建立帳號", "user", username)
+    elif user["password"] != password:
+        return error_response("密碼錯誤")
+    session.permanent = True
+    session["user"] = username
+    log_action(username, "登入系統", "auth", username)
+    return jsonify({"success": True, "username": username, "redirect": url_for("home")})
+
 
 @app.route("/api/logout", methods=["POST"])
-@login_required_json
 def api_logout():
-    user = current_username()
+    username = session.get("user", "")
+    if username:
+        log_action(username, "登出系統", "auth", username)
     session.clear()
-    try:
-        log_action(user, "登出系統")
-    except Exception:
-        pass
-    return jsonify(success=True)
+    return jsonify({"success": True})
+
 
 @app.route("/api/change_password", methods=["POST"])
-@login_required_json
 def api_change_password():
-    try:
-        data = request.get_json(silent=True) or {}
-        old_password = (data.get("old_password") or "").strip()
-        new_password = (data.get("new_password") or "").strip()
-        confirm_password = (data.get("confirm_password") or "").strip()
-        user = get_user(current_username())
-        if not user or user["password"] != old_password:
-            return error_response("舊密碼錯誤")
-        if not new_password or len(new_password) < 4:
-            return error_response("新密碼至少 4 碼")
-        if new_password != confirm_password:
-            return error_response("兩次密碼不一致")
-        update_password(current_username(), new_password)
-        log_action(current_username(), "修改密碼")
-        return jsonify(success=True)
-    except Exception as e:
-        log_error("change_password", str(e))
-        return error_response("修改失敗")
+    if not require_login():
+        return error_response("請先登入", 401)
+    data = json_request()
+    old = (data.get("old_password") or "").strip()
+    new = (data.get("new_password") or "").strip()
+    user = get_user(session["user"])
+    if not user or user["password"] != old:
+        return error_response("舊密碼錯誤")
+    if len(new) < 4:
+        return error_response("新密碼至少 4 碼")
+    update_user_password(session["user"], new)
+    log_action(session["user"], "修改密碼", "auth", session["user"])
+    return jsonify({"success": True})
 
+
+# ---------- dashboard ----------
+@app.route("/api/dashboard")
+def api_dashboard():
+    if not require_login():
+        return error_response("請先登入", 401)
+    return jsonify({"success": True, "summary": dashboard_summary(), "reconciliation": reconciliation(), "today": today_str()})
+
+
+@app.route("/api/today_changes")
+def api_today_changes():
+    if not require_login():
+        return error_response("請先登入", 401)
+    today = today_str()
+    logs = query_all("SELECT * FROM logs WHERE created_at LIKE ? ORDER BY id DESC", (today + "%",))
+    notifications = list_notifications(limit=200)
+    if notifications:
+        from db import mark_notifications_read
+        mark_notifications_read([n["id"] for n in notifications if not int(n.get("read_flag") or 0)])
+    summary = dashboard_summary()
+    return jsonify({"success": True, "logs": logs, "notifications": notifications, "summary": summary})
+
+
+# ---------- customers ----------
+@app.route("/api/customers")
+def api_customers():
+    if not require_login():
+        return error_response("請先登入", 401)
+    return jsonify({"success": True, "customers": list_customers()})
+
+
+@app.route("/api/customers/suggest")
+def api_customers_suggest():
+    if not require_login():
+        return error_response("請先登入", 401)
+    q = request.args.get("q", "")
+    return jsonify({"success": True, "customers": suggest_customers(q)})
+
+
+@app.route("/api/customers/<int:customer_id>", methods=["POST"])
+def api_update_customer(customer_id):
+    if not require_login():
+        return error_response("請先登入", 401)
+    data = json_request()
+    update_customer(customer_id, **data)
+    log_action(session["user"], "修改客戶資料", "customer", str(customer_id), data)
+    add_notification("customer", f"{session['user']}｜更新了客戶資料", session["user"], data)
+    return jsonify({"success": True})
+
+
+# ---------- inventory ----------
+@app.route("/api/inventory")
+def api_inventory():
+    if not require_login():
+        return error_response("請先登入", 401)
+    return jsonify({"success": True, "items": list_inventory(), "unplaced": [r["product"] for r in get_unplaced_products()]})
+
+
+@app.route("/api/inventory/save", methods=["POST"])
+def api_inventory_save():
+    if not require_login():
+        return error_response("請先登入", 401)
+    data = json_request()
+    items = data.get("items") or []
+    results = []
+    for item in items:
+        product = item.get("product") or item.get("product_name") or ""
+        qty = int(item.get("quantity") or 1)
+        location = item.get("location") or ""
+        customer_name = item.get("customer_name") or ""
+        note = item.get("note") or ""
+        upsert_customer(customer_name) if customer_name else None
+        upsert_inventory(product, qty, location, customer_name, session["user"], note)
+        log_action(session["user"], "建立庫存", "inventory", product, item)
+        add_notification("inventory", f"{session['user']}｜更新了庫存", session["user"], item)
+        results.append({"product": product, "qty": qty})
+    return jsonify({"success": True, "items": results})
+
+
+# ---------- OCR ----------
 @app.route("/api/upload_ocr", methods=["POST"])
-@login_required_json
 def api_upload_ocr():
+    if not require_login():
+        return error_response("請先登入", 401)
+    file = request.files.get("file")
+    if not file:
+        return error_response("未選擇圖片")
+    if not allowed_file(file.filename):
+        return error_response("圖片格式錯誤")
+    content = file.read()
+    if len(content) > app.config["MAX_CONTENT_LENGTH"]:
+        return error_response("圖片過大")
+    image_hash = hashlib.md5(content).hexdigest()
+    if image_hash_exists(image_hash):
+        return error_response("此圖片已上傳過")
+    ext = file.filename.rsplit(".", 1)[1].lower()
+    filename = f"{image_hash}.{ext}"
+    path = os.path.join(UPLOAD_FOLDER, filename)
+    with open(path, "wb") as f:
+        f.write(content)
+    compress_image(path)
+
+    # optional region crop coords
+    region = None
     try:
-        file = request.files.get("file")
-        if not file:
-            return error_response("未選擇圖片")
-        if not allowed_file(file.filename):
-            return error_response("圖片格式錯誤")
-        content = file.read()
-        if len(content) > MAX_UPLOAD_SIZE:
-            return error_response("圖片過大")
-        image_hash = hashlib.md5(content).hexdigest()
-        if image_hash_exists(image_hash):
-            return error_response("此圖片已上傳過")
-        ext = file.filename.rsplit(".", 1)[1].lower()
-        filename = f"{image_hash}.{ext}"
-        path = os.path.join(UPLOAD_FOLDER, filename)
-        with open(path, "wb") as f:
-            f.write(content)
-        compress_image(path)
-        result = process_ocr_text(path)
-        save_image_hash(image_hash)
-        confidence = int(result.get("confidence", 0))
-        log_action(current_username(), f"OCR辨識｜信心值:{confidence}%")
-        return jsonify(success=True, text=result.get("text", ""), items=result.get("items", []), confidence=confidence,
-                       warning=("辨識信心偏低，請確認內容" if confidence < 80 else ""), sync_time=int(os.path.getmtime(path)))
-    except Exception as e:
-        log_error("upload_ocr", str(e))
-        return error_response("OCR辨識失敗")
+        x = request.form.get("crop_x")
+        y = request.form.get("crop_y")
+        w = request.form.get("crop_w")
+        h = request.form.get("crop_h")
+        if all(v not in (None, "", "undefined") for v in [x, y, w, h]):
+            region = [int(x), int(y), int(w), int(h)]
+    except Exception:
+        region = None
+
+    customer_keyword = request.form.get("customer_keyword", "")
+    result = process_ocr_text(path, region=region, customer_keyword=customer_keyword)
+    save_image_hash(image_hash)
+
+    # store correction if manual correction supplied
+    manual_text = request.form.get("manual_text", "").strip()
+    if manual_text:
+        for line in manual_text.splitlines():
+            if line.strip():
+                save_correction(line.strip(), line.strip())
+
+    log_action(session["user"], "OCR辨識", "ocr", file.filename, {"confidence": result.get("confidence", 0)})
+    if result.get("warning"):
+        add_notification("ocr", f"{session['user']}｜OCR 信心偏低", session["user"], result)
+
+    return jsonify({
+        "success": True,
+        "text": result.get("text", ""),
+        "items": result.get("items", []),
+        "confidence": result.get("confidence", 0),
+        "warning": result.get("warning", ""),
+        "customer_name": result.get("customer_name", ""),
+        "sync_time": int(os.path.getmtime(path))
+    })
+
 
 @app.route("/api/save_correction", methods=["POST"])
-@login_required_json
 def api_save_correction():
-    try:
-        data = request.get_json(silent=True) or {}
-        wrong = (data.get("wrong_text") or "").strip()
-        correct = (data.get("correct_text") or "").strip()
-        if wrong and correct and wrong != correct:
-            save_correction(wrong, correct)
-            log_action(current_username(), f"修正OCR {wrong}->{correct}")
-        return jsonify(success=True)
-    except Exception as e:
-        log_error("save_correction", str(e))
-        return error_response("儲存失敗")
+    if not require_login():
+        return error_response("請先登入", 401)
+    data = json_request()
+    wrong = (data.get("wrong_text") or "").strip()
+    correct = (data.get("correct_text") or "").strip()
+    if wrong and correct and wrong != correct:
+        save_correction(wrong, correct)
+        log_action(session["user"], f"修正OCR {wrong}->{correct}", "ocr", wrong)
+        add_notification("ocr", f"{session['user']}｜已修正 OCR", session["user"], {"wrong": wrong, "correct": correct})
+    return jsonify({"success": True})
 
-def _parse_items_from_request(data):
-    items = data.get("items") or []
-    if items:
-        cleaned = []
-        for it in items:
-            qty = int(it.get("qty", 0))
-            if qty <= 0:
-                continue
-            cleaned.append({
-                "product_text": it.get("product_text") or it.get("product") or "",
-                "product_code": it.get("product_code") or "",
-                "qty": qty
-            })
-        return cleaned
-    text = data.get("ocr_text") or data.get("text") or ""
-    parsed_items, _ = parse_lines_to_items(text)
-    return [{"product_text": it["product_text"], "product_code": it.get("product_code", ""), "qty": int(it["qty"])} for it in parsed_items]
 
-@app.route("/api/inventory", methods=["GET", "POST"])
-@login_required_json
-def api_inventory():
-    try:
-        if request.method == "GET":
-            return jsonify(success=True, items=grouped_inventory())
-        data = request.get_json(silent=True) or {}
-        items = _parse_items_from_request(data)
-        operator = current_username()
-        location = (data.get("location") or "").strip()
-        customer_name = (data.get("customer_name") or "").strip()
-        for it in items:
-            save_inventory_item(it["product_text"], it.get("product_code", ""), int(it["qty"]), location, customer_name, operator, data.get("ocr_text", ""))
-        log_action(operator, f"建立庫存｜客戶:{customer_name or '未指定'}｜位置:{location or '未指定'}｜商品:{'、'.join([it.get('product_text', '') for it in items[:3]])}")
-        return jsonify(success=True, items=grouped_inventory())
-    except Exception as e:
-        log_error("inventory", str(e))
-        return error_response("建立失敗")
+# ---------- orders / master / shipping ----------
+def parse_items(items):
+    normalized = []
+    for item in items or []:
+        product = item.get("product") or item.get("product_name") or ""
+        qty = int(item.get("quantity") or 1)
+        if product:
+            normalized.append({"product": product, "quantity": qty})
+    return normalized
 
-@app.route("/api/orders", methods=["GET", "POST"])
-@login_required_json
+
+@app.route("/api/orders")
 def api_orders():
-    try:
-        if request.method == "GET":
-            return jsonify(success=True, items=get_orders())
-        data = request.get_json(silent=True) or {}
-        items = _parse_items_from_request(data)
-        customer_name = (data.get("customer_name") or "").strip()
-        if not customer_name:
-            return error_response("請輸入客戶名稱")
-        save_order(customer_name, items, current_username())
-        log_action(current_username(), f"建立訂單｜客戶:{customer_name}｜商品:{'、'.join([it.get('product_text', '') for it in items[:3]])}")
-        return jsonify(success=True, items=get_orders())
-    except Exception as e:
-        log_error("orders", str(e))
-        return error_response("訂單建立失敗")
+    if not require_login():
+        return error_response("請先登入", 401)
+    return jsonify({"success": True, "items": list_orders()})
 
-@app.route("/api/master_orders", methods=["GET", "POST"])
-@login_required_json
+
+@app.route("/api/orders/save", methods=["POST"])
+def api_orders_save():
+    if not require_login():
+        return error_response("請先登入", 401)
+    data = json_request()
+    customer = (data.get("customer_name") or data.get("customer") or "").strip()
+    items = parse_items(data.get("items"))
+    created = save_order(customer, items, session["user"])
+    log_action(session["user"], "建立訂單", "order", customer, {"items": created})
+    add_notification("order", f"{session['user']}｜新增訂單", session["user"], {"customer": customer})
+    return jsonify({"success": True, "items": created})
+
+
+@app.route("/api/master_orders")
 def api_master_orders():
-    try:
-        if request.method == "GET":
-            return jsonify(success=True, items=get_master_orders())
-        data = request.get_json(silent=True) or {}
-        items = _parse_items_from_request(data)
-        customer_name = (data.get("customer_name") or "").strip()
-        if not customer_name:
-            return error_response("請輸入客戶名稱")
-        save_master_order(customer_name, items, current_username())
-        log_action(current_username(), f"更新總單｜客戶:{customer_name}｜商品:{'、'.join([it.get('product_text', '') for it in items[:3]])}")
-        return jsonify(success=True, items=get_master_orders())
-    except Exception as e:
-        log_error("master_orders", str(e))
-        return error_response("總單失敗")
+    if not require_login():
+        return error_response("請先登入", 401)
+    return jsonify({"success": True, "items": list_master_orders()})
+
+
+@app.route("/api/master_orders/save", methods=["POST"])
+def api_master_orders_save():
+    if not require_login():
+        return error_response("請先登入", 401)
+    data = json_request()
+    customer = (data.get("customer_name") or data.get("customer") or "").strip()
+    items = parse_items(data.get("items"))
+    save_master_order(customer, items, session["user"])
+    log_action(session["user"], "更新總單", "master_order", customer, {"items": items})
+    add_notification("master_order", f"{session['user']}｜更新總單", session["user"], {"customer": customer})
+    return jsonify({"success": True})
+
+
+def deduct_orders(customer, product, qty):
+    """
+    Reduce master_orders first then orders; returns deducted counts.
+    """
+    remaining = int(qty)
+    master_deduct = 0
+    order_deduct = 0
+
+    # master orders
+    rows = query_all("SELECT id, qty FROM master_orders WHERE customer_name=? AND product=? ORDER BY id ASC", (customer, product))
+    for row in rows:
+        if remaining <= 0:
+            break
+        take = min(int(row["qty"]), remaining)
+        if take > 0:
+            new_qty = int(row["qty"]) - take
+            execute("UPDATE master_orders SET qty=?, updated_at=? WHERE id=?", (new_qty, now(), row["id"]))
+            master_deduct += take
+            remaining -= take
+
+    # orders
+    rows = query_all("SELECT id, qty FROM orders WHERE customer_name=? AND product=? AND status!='shipped' ORDER BY id ASC", (customer, product))
+    for row in rows:
+        if remaining <= 0:
+            break
+        take = min(int(row["qty"]), remaining)
+        if take > 0:
+            new_qty = int(row["qty"]) - take
+            if new_qty <= 0:
+                execute("UPDATE orders SET qty=0, status='shipped', updated_at=? WHERE id=?", (now(), row["id"]))
+            else:
+                execute("UPDATE orders SET qty=?, status='partial', updated_at=? WHERE id=?", (new_qty, now(), row["id"]))
+            order_deduct += take
+            remaining -= take
+
+    return master_deduct, order_deduct, remaining
+
+
+def deduct_inventory(product, qty):
+    remaining = int(qty)
+    inventory_deduct = 0
+    rows = query_all("SELECT id, quantity FROM inventory WHERE product=? AND quantity>0 ORDER BY quantity DESC", (product,))
+    total = sum(int(r["quantity"]) for r in rows)
+    if total < qty:
+        return None, f"{product} 庫存不足"
+    for row in rows:
+        if remaining <= 0:
+            break
+        take = min(int(row["quantity"]), remaining)
+        execute("UPDATE inventory SET quantity = quantity - ?, updated_at=? WHERE id=?", (take, now(), row["id"]))
+        remaining -= take
+        inventory_deduct += take
+    return inventory_deduct, None
+
+
+
 
 @app.route("/api/ship", methods=["POST"])
-@login_required_json
 def api_ship():
-    try:
-        data = request.get_json(silent=True) or {}
-        items = _parse_items_from_request(data)
-        customer_name = (data.get("customer_name") or "").strip()
-        if not customer_name:
-            return error_response("請輸入客戶名稱")
-        # confirm ship button required from frontend
-        result = ship_order(customer_name, items, current_username())
-        if result.get("success"):
-            log_action(current_username(), f"完成出貨｜客戶:{customer_name}｜商品:{'、'.join([it.get('product_text', '') for it in items[:3]])}")
-        return jsonify(result)
-    except Exception as e:
-        log_error("ship", str(e))
-        return error_response("出貨失敗")
+    if not require_login():
+        return error_response("請先登入", 401)
+    data = json_request()
+    customer = (data.get("customer_name") or data.get("customer") or "").strip()
+    items = parse_items(data.get("items"))
+    if not customer or not items:
+        return error_response("資料不足")
 
-@app.route("/api/shipping_records", methods=["GET"])
-@login_required_json
-def api_shipping_records():
-    start_date = request.args.get("start_date")
-    end_date = request.args.get("end_date")
-    rows = get_shipping_records(start_date=start_date, end_date=end_date)
-    return jsonify(success=True, records=rows)
+    from db import get_db, sql as dbsql
+    with get_db() as conn:
+        try:
+            cur = conn.cursor()
+            details = []
+            total_master = 0
+            total_order = 0
+            total_inventory = 0
 
-@app.route("/api/customers", methods=["GET", "POST"])
-@login_required_json
-def api_customers():
-    try:
-        if request.method == "GET":
-            return jsonify(success=True, items=get_customers())
-        data = request.get_json(silent=True) or {}
-        name = (data.get("name") or "").strip()
-        if not name:
-            return error_response("請輸入客戶名稱")
-        upsert_customer(
-            name,
-            phone=(data.get("phone") or "").strip(),
-            address=(data.get("address") or "").strip(),
-            notes=(data.get("notes") or "").strip(),
-            region=(data.get("region") or "北區").strip()
-        )
-        log_action(current_username(), f"儲存客戶｜{name}｜區域:{data.get('region') or '北區'}")
-        return jsonify(success=True, items=get_customers())
-    except Exception as e:
-        log_error("customers", str(e))
-        return error_response("客戶儲存失敗")
+            for item in items:
+                product = item["product"]
+                qty = int(item["quantity"])
 
-@app.route("/api/customers/<name>", methods=["GET"])
-@login_required_json
-def api_customer_detail(name):
-    row = get_customer(name)
-    return jsonify(success=True, item=row)
+                cur.execute(dbsql("SELECT COALESCE(SUM(qty), 0) FROM master_orders WHERE customer_name=? AND product=?"), (customer, product))
+                master_total = int(cur.fetchone()[0])
 
-@app.route("/api/warehouse", methods=["GET"])
-@login_required_json
+                cur.execute(dbsql("SELECT COALESCE(SUM(qty), 0) FROM orders WHERE customer_name=? AND product=? AND status!='shipped'"), (customer, product))
+                order_total = int(cur.fetchone()[0])
+
+                cur.execute(dbsql("SELECT COALESCE(SUM(quantity), 0) FROM inventory WHERE product=?"), (product,))
+                inventory_total = int(cur.fetchone()[0])
+
+                if inventory_total < qty:
+                    conn.rollback()
+                    return error_response(f"{product} 庫存不足")
+
+                master_take = min(master_total, qty)
+                order_take = min(order_total, max(qty - master_take, 0))
+                inventory_take = qty
+
+                # Deduct master orders first
+                if master_take > 0:
+                    cur.execute(dbsql("SELECT id, qty FROM master_orders WHERE customer_name=? AND product=? AND qty>0 ORDER BY id ASC"), (customer, product))
+                    rows = cur.fetchall()
+                    remaining = master_take
+                    for row in rows:
+                        if remaining <= 0:
+                            break
+                        rid = row[0] if isinstance(row, tuple) else row["id"]
+                        rqty = row[1] if isinstance(row, tuple) else row["qty"]
+                        take = min(int(rqty), remaining)
+                        cur.execute(dbsql("UPDATE master_orders SET qty = qty - ?, updated_at=? WHERE id=?"), (take, now(), rid))
+                        remaining -= take
+
+                # Deduct orders next
+                if order_take > 0:
+                    cur.execute(dbsql("SELECT id, qty FROM orders WHERE customer_name=? AND product=? AND status!='shipped' AND qty>0 ORDER BY id ASC"), (customer, product))
+                    rows = cur.fetchall()
+                    remaining = order_take
+                    for row in rows:
+                        if remaining <= 0:
+                            break
+                        rid = row[0] if isinstance(row, tuple) else row["id"]
+                        rqty = row[1] if isinstance(row, tuple) else row["qty"]
+                        take = min(int(rqty), remaining)
+                        new_qty = int(rqty) - take
+                        if new_qty <= 0:
+                            cur.execute(dbsql("UPDATE orders SET qty=0, status='shipped', updated_at=? WHERE id=?"), (now(), rid))
+                        else:
+                            cur.execute(dbsql("UPDATE orders SET qty=?, status='partial', updated_at=? WHERE id=?"), (new_qty, now(), rid))
+                        remaining -= take
+
+                # Deduct inventory last
+                cur.execute(dbsql("SELECT id, quantity FROM inventory WHERE product=? AND quantity>0 ORDER BY quantity DESC"), (product,))
+                rows = cur.fetchall()
+                remaining = inventory_take
+                inv_deducted = 0
+                for row in rows:
+                    if remaining <= 0:
+                        break
+                    rid = row[0] if isinstance(row, tuple) else row["id"]
+                    rqty = row[1] if isinstance(row, tuple) else row["quantity"]
+                    take = min(int(rqty), remaining)
+                    cur.execute(dbsql("UPDATE inventory SET quantity = quantity - ?, updated_at=? WHERE id=?"), (take, now(), rid))
+                    remaining -= take
+                    inv_deducted += take
+
+                details.append({
+                    "product": product,
+                    "qty": qty,
+                    "master": master_take,
+                    "order": order_take,
+                    "inventory": inv_deducted
+                })
+                total_master += master_take
+                total_order += order_take
+                total_inventory += inv_deducted
+
+            cur.execute(
+                dbsql("INSERT INTO shipping_records(customer_name, product, qty, operator, deducted_master, deducted_order, deducted_inventory, details_json, shipped_at) VALUES(?,?,?,?,?,?,?,?,?)"),
+                (
+                    customer,
+                    json.dumps([d["product"] for d in details], ensure_ascii=False),
+                    sum(d["qty"] for d in details),
+                    session["user"],
+                    total_master,
+                    total_order,
+                    total_inventory,
+                    json.dumps(details, ensure_ascii=False),
+                    now()
+                )
+            )
+            conn.commit()
+
+            log_action(session["user"], "完成出貨", "shipping", customer, {"details": details})
+            add_notification("shipping", f"{session['user']}｜已完成出貨", session["user"], {"customer": customer, "details": details})
+            return jsonify({
+                "success": True,
+                "details": details,
+                "message": "出貨完成",
+                "customer": customer,
+                "deducted_master": total_master,
+                "deducted_order": total_order,
+                "deducted_inventory": total_inventory
+            })
+        except Exception as e:
+            conn.rollback()
+            return error_response("出貨失敗: " + str(e))
+
+
+# ---------- warehouse ----------
+@app.route("/api/warehouse")
 def api_warehouse():
-    return jsonify(success=True, zones=warehouse_summary(), cells=warehouse_get_cells())
+    if not require_login():
+        return error_response("請先登入", 401)
+    zone = request.args.get("zone")
+    cells = list_warehouse_cells(zone)
+    products = [r["product"] for r in list_inventory()]
+    return jsonify({"success": True, "cells": cells, "products": products})
 
-@app.route("/api/warehouse/cell", methods=["POST"])
-@login_required_json
-def api_warehouse_cell():
-    try:
-        data = request.get_json(silent=True) or {}
-        zone = data.get("zone")
-        column_index = int(data.get("column_index"))
-        slot_type = data.get("slot_type")
-        slot_number = int(data.get("slot_number"))
-        items = data.get("items") or []
-        note = data.get("note") or ""
-        warehouse_save_cell(zone, column_index, slot_type, slot_number, items, note)
-        log_action(current_username(), f"更新倉庫格位｜{zone}{column_index}-{slot_type}-{slot_number}")
-        return jsonify(success=True, zones=warehouse_summary())
-    except Exception as e:
-        log_error("warehouse_cell", str(e))
-        return error_response("格位更新失敗")
-
-@app.route("/api/warehouse/move", methods=["POST"])
-@login_required_json
-def api_warehouse_move():
-    try:
-        data = request.get_json(silent=True) or {}
-        from_key = data.get("from_key")
-        to_key = data.get("to_key")
-        product_text = data.get("product_text")
-        qty = int(data.get("qty", 1))
-        if not (from_key and to_key and product_text):
-            return error_response("缺少參數")
-        result = warehouse_move_item(tuple(from_key), tuple(to_key), product_text, qty)
-        if result.get("success"):
-            log_action(current_username(), f"拖曳商品｜{product_text}｜{from_key[0]}{from_key[1]}-{from_key[2]}-{from_key[3]}→{to_key[0]}{to_key[1]}-{to_key[2]}-{to_key[3]}")
-        return jsonify(result)
-    except Exception as e:
-        log_error("warehouse_move", str(e))
-        return error_response("拖曳失敗")
 
 @app.route("/api/warehouse/search")
-@login_required_json
 def api_warehouse_search():
-    q = (request.args.get("q") or "").strip()
-    cells = warehouse_get_cells()
-    matched = []
-    for cell in cells:
-        try:
-            items = json.loads(cell.get("items_json") or "[]")
-        except Exception:
-            items = []
-        for it in items:
-            hay = f"{cell['zone']} {cell['column_index']} {cell['slot_type']} {cell['slot_number']} {it.get('product_text','')} {it.get('customer_name','')}"
-            if not q or q.lower() in hay.lower():
-                matched.append({"cell": cell, "item": it})
-                break
-    return jsonify(success=True, items=matched)
-
-@app.route("/api/warehouse/available-items", methods=["GET"])
-@login_required_json
-def api_warehouse_available_items():
-    inv = inventory_summary()
-    options = [r for r in inv if int(r.get("unplaced_qty", 0)) > 0]
-    return jsonify(success=True, items=options)
+    if not require_login():
+        return error_response("請先登入", 401)
+    q = request.args.get("q", "")
+    return jsonify({"success": True, "cells": warehouse_search(q)})
 
 
-@app.route("/api/customer-items", methods=["GET"])
-@login_required_json
-def api_customer_items():
-    name = (request.args.get("name") or "").strip()
-    inv = list_inventory()
-    orders = get_orders()
-    masters = get_master_orders()
-    items = []
-    if name:
-        for row in orders:
-            if row.get("customer_name") == name:
-                items.append({"source": "訂單", **row})
-        for row in masters:
-            if row.get("customer_name") == name:
-                items.append({"source": "總單", **row})
-        for row in inv:
-            if row.get("customer_name") == name:
-                items.append({"source": "庫存", **row})
-    else:
-        items = []
-    return jsonify(success=True, items=items)
+@app.route("/api/warehouse/save", methods=["POST"])
+def api_warehouse_save():
+    if not require_login():
+        return error_response("請先登入", 401)
+    data = json_request()
+    zone = data.get("zone", "A")
+    column_no = int(data.get("column_no", 1))
+    position = data.get("position", "front")
+    slot_no = int(data.get("slot_no", 1))
+    customer_name = (data.get("customer_name") or "").strip()
+    product = (data.get("product") or "").strip()
+    qty = int(data.get("qty") or 0)
+    note = (data.get("note") or "").strip()
+
+    save_warehouse_cell(zone, column_no, position, slot_no, customer_name, product, qty, note)
+    upsert_customer(customer_name) if customer_name else None
+    log_action(session["user"], "更新倉庫格位", "warehouse", f"{zone}-{column_no}-{position}-{slot_no}", data)
+    add_notification("warehouse", f"{session['user']}｜更新了倉庫格位", session["user"], data)
+    return jsonify({"success": True})
 
 
-@app.route("/activity")
-def activity_page():
-    return render_template("module.html", module_key="activity", title="今日異動", username=current_username())
+@app.route("/api/warehouse/delete", methods=["POST"])
+def api_warehouse_delete():
+    if not require_login():
+        return error_response("請先登入", 401)
+    data = json_request()
+    cell_id = data.get("id")
+    if cell_id:
+        delete_warehouse_cell(int(cell_id))
+        log_action(session["user"], "刪除倉庫格位", "warehouse", str(cell_id))
+        add_notification("warehouse", f"{session['user']}｜刪除倉庫格位", session["user"], {"id": cell_id})
+    return jsonify({"success": True})
 
 
-def _today_date():
-    return now()[:10]
+# ---------- notifications ----------
+@app.route("/api/notifications")
+def api_notifications():
+    if not require_login():
+        return error_response("請先登入", 401)
+    unread_only = request.args.get("unread") == "1"
+    limit = int(request.args.get("limit", 100))
+    items = list_notifications(limit=limit, unread_only=unread_only)
+    return jsonify({"success": True, "items": items})
 
 
-def _today_errors_feed():
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(sql("SELECT * FROM errors WHERE substr(created_at,1,10) = ? ORDER BY id DESC"), (_today_date(),))
-    rows = rows_to_dict(cur)
-    conn.close()
-    return rows
+@app.route("/api/notifications/mark_read", methods=["POST"])
+def api_notifications_mark_read():
+    if not require_login():
+        return error_response("請先登入", 401)
+    data = json_request()
+    mark_notifications_read(data.get("ids") or [])
+    return jsonify({"success": True})
 
 
-def _today_activity_summary(seen_after=None):
-    logs = get_activity_logs(limit=300, today_only=True)
-    inventory_rows = inventory_summary()
-    unplaced_qty = sum(int(r.get('unplaced_qty', 0)) for r in inventory_rows)
-    shipping_qty = get_today_shipping_qty()
-    errors = _today_errors_feed()
-    log_additions = sum(1 for r in logs if str(r.get('action', '')).startswith(('建立', '儲存', '更新')))
-    error_like = sum(1 for r in logs if ('失敗' in str(r.get('action', ''))) or ('錯誤' in str(r.get('action', ''))))
-    latest = logs[0]['created_at'] if logs else ''
-    if seen_after:
-        unread = sum(1 for r in logs if str(r.get('created_at', '')) > seen_after) + sum(1 for e in errors if str(e.get('created_at', '')) > seen_after)
-    else:
-        unread = len(logs) + len(errors)
-    return {
-        'today_new': int(log_additions),
-        'today_shipping_qty': int(shipping_qty),
-        'unplaced_qty': int(unplaced_qty),
-        'today_errors': int(len(errors) + error_like),
-        'unread': int(unread),
-        'latest': latest,
-    }
+# ---------- reconciliation / backups ----------
+@app.route("/api/reconciliation")
+def api_reconciliation():
+    if not require_login():
+        return error_response("請先登入", 401)
+    return jsonify({"success": True, "items": reconciliation()})
 
 
-@app.route("/api/activity/summary", methods=["GET"])
-@login_required_json
-def api_activity_summary():
-    seen_after = (request.args.get('seen_after') or '').strip() or None
-    return jsonify(success=True, summary=_today_activity_summary(seen_after))
+@app.route("/api/backup/run", methods=["POST"])
+def api_backup_run():
+    if not require_login():
+        return error_response("請先登入", 401)
+    result = run_daily_backup()
+    log_action(session["user"], "手動備份", "backup", "manual")
+    add_notification("backup", f"{session['user']}｜已完成備份", session["user"], result)
+    return jsonify(result)
 
 
-@app.route("/api/activity/feed", methods=["GET"])
-@login_required_json
-def api_activity_feed():
-    limit = int(request.args.get('limit', 60) or 60)
-    logs = get_activity_logs(limit=limit, today_only=True)
-    errors = _today_errors_feed()
-    feed = []
-    for row in logs:
-        feed.append({
-            'kind': 'log',
-            'username': row.get('username', ''),
-            'action': row.get('action', ''),
-            'created_at': row.get('created_at', ''),
-        })
-    for row in errors:
-        feed.append({
-            'kind': 'error',
-            'username': row.get('source', '系統'),
-            'action': f"異常｜{row.get('message', '')}",
-            'created_at': row.get('created_at', ''),
-        })
-    feed.sort(key=lambda x: x.get('created_at', ''), reverse=True)
-    return jsonify(success=True, items=feed[:limit], summary=_today_activity_summary())
-
-
-@app.route("/api/backup", methods=["POST", "GET"])
-@login_required_json
-def api_backup():
-    return jsonify(run_daily_backup())
-
-@app.route("/api/backups", methods=["GET"])
-@login_required_json
-def api_backups():
+@app.route("/api/backup/list")
+def api_backup_list():
+    if not require_login():
+        return error_response("請先登入", 401)
     return jsonify(list_backups())
 
+
+# ---------- health ----------
 @app.route("/health")
 def health():
     return "OK"
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))

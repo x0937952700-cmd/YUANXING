@@ -1,83 +1,64 @@
-
 import os
 import json
 import shutil
 from datetime import datetime
+from pathlib import Path
 
-from db import get_db, USE_POSTGRES, DATABASE_URL, log_error
+from db import get_db, USE_POSTGRES, DATABASE_URL, query_all, log_action, now
 
-BACKUP_FOLDER = "backups"
-os.makedirs(BACKUP_FOLDER, exist_ok=True)
+BACKUP_FOLDER = Path("backups")
+BACKUP_FOLDER.mkdir(exist_ok=True)
 
-def _backup_filename(prefix, ext):
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return os.path.join(BACKUP_FOLDER, f"{prefix}_{timestamp}.{ext}")
 
-def _trim_backups(prefix, keep=7):
-    files = [f for f in os.listdir(BACKUP_FOLDER) if f.startswith(prefix + "_")]
-    files = sorted(files)
-    while len(files) > keep:
-        old = files.pop(0)
+def backup_filename(prefix, ext):
+    return BACKUP_FOLDER / f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{ext}"
+
+
+def prune_backups(keep=7):
+    files = sorted([p for p in BACKUP_FOLDER.iterdir() if p.is_file()], key=lambda p: p.stat().st_mtime, reverse=True)
+    for p in files[keep:]:
         try:
-            os.remove(os.path.join(BACKUP_FOLDER, old))
+            p.unlink()
         except Exception:
             pass
 
+
 def backup_sqlite():
-    try:
-        db_path = DATABASE_URL.replace("sqlite:///", "")
-        target = _backup_filename("sqlite_backup", "db")
-        shutil.copy2(db_path, target)
-        _trim_backups("sqlite_backup")
-        return {"success": True, "type": "sqlite", "file": target}
-    except Exception as e:
-        log_error("backup_sqlite", str(e))
-        return {"success": False, "error": str(e)}
+    db_path = DATABASE_URL.replace("sqlite:///", "")
+    target = backup_filename("sqlite_backup", "db")
+    shutil.copy2(db_path, target)
+    return {"success": True, "type": "sqlite", "file": str(target)}
+
 
 def backup_postgres():
-    try:
-        conn = get_db()
-        cur = conn.cursor()
-        tables = [
-            "users", "customer_profiles", "inventory", "orders", "master_orders",
-            "shipping_records", "corrections", "image_hashes", "logs", "errors", "warehouse_cells"
-        ]
-        backup_data = {}
-        for table in tables:
-            cur.execute(f"SELECT * FROM {table}")
-            cols = [d[0] for d in cur.description]
-            rows = cur.fetchall()
-            backup_data[table] = [dict(zip(cols, row)) for row in rows]
-        conn.close()
-        target = _backup_filename("postgres_backup", "json")
-        with open(target, "w", encoding="utf-8") as f:
-            json.dump(backup_data, f, ensure_ascii=False, indent=2)
-        _trim_backups("postgres_backup")
-        return {"success": True, "type": "postgres", "file": target}
-    except Exception as e:
-        log_error("backup_postgres", str(e))
-        return {"success": False, "error": str(e)}
+    tables = ["users", "settings", "customers", "inventory", "orders", "master_orders", "shipping_records", "corrections", "image_hashes", "logs", "notifications", "warehouse_cells"]
+    data = {}
+    for table in tables:
+        try:
+            data[table] = query_all(f"SELECT * FROM {table}")
+        except Exception as e:
+            data[table] = {"error": str(e)}
+    target = backup_filename("postgres_backup", "json")
+    target.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    return {"success": True, "type": "postgres", "file": str(target)}
+
 
 def run_daily_backup():
     try:
-        return backup_postgres() if USE_POSTGRES else backup_sqlite()
+        result = backup_postgres() if USE_POSTGRES else backup_sqlite()
+        prune_backups(7)
+        return result
     except Exception as e:
-        log_error("run_daily_backup", str(e))
         return {"success": False, "error": str(e)}
 
+
 def list_backups():
-    try:
-        files = []
-        for filename in os.listdir(BACKUP_FOLDER):
-            path = os.path.join(BACKUP_FOLDER, filename)
-            if os.path.isfile(path):
-                files.append({
-                    "filename": filename,
-                    "size": os.path.getsize(path),
-                    "created_at": datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d %H:%M:%S")
-                })
-        files.sort(key=lambda x: x["created_at"], reverse=True)
-        return {"success": True, "files": files}
-    except Exception as e:
-        log_error("list_backups", str(e))
-        return {"success": False, "files": []}
+    files = []
+    for p in sorted(BACKUP_FOLDER.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+        if p.is_file():
+            files.append({
+                "filename": p.name,
+                "size": p.stat().st_size,
+                "created_at": datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+            })
+    return {"success": True, "files": files}

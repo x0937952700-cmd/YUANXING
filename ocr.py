@@ -1,158 +1,213 @@
-
 import re
+from collections import defaultdict
 from difflib import get_close_matches
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageOps, ImageFilter, ImageEnhance
+import pytesseract
 
-from db import get_db, log_error, get_corrections, list_inventory
+from db import get_corrections, list_customers
 
-try:
-    import pytesseract
-except Exception:
-    pytesseract = None
 
 NOISE_WORDS = [
-    "全部筆記", "昨天", "今天", "備忘錄", "新增", "完成", "搜尋",
-    "筆記", "ocr", "key", "掃描文件", "編輯", "返回", "分享"
+    "搜尋", "輸入", "辨識", "確認", "上傳", "拍照", "相簿", "返回", "刷新",
+    "編輯", "客戶資料", "倉庫圖", "庫存", "總單", "訂單", "出貨", "今日異動"
 ]
+
 
 def preprocess_image(image_path):
     img = Image.open(image_path)
     img = ImageOps.exif_transpose(img)
-    img = img.convert("L")
-    width, height = img.size
-    if width < 1200:
-        img = img.resize((width * 2, height * 2))
-    img = img.filter(ImageFilter.MedianFilter())
-    img = ImageEnhance.Contrast(img).enhance(2.2)
-    img = ImageEnhance.Sharpness(img).enhance(1.8)
-    return img
+    if img.mode not in ("L", "RGB"):
+        img = img.convert("RGB")
+    gray = img.convert("L")
+    # upscale to improve OCR
+    if gray.width < 1800:
+        ratio = 1800 / float(gray.width)
+        gray = gray.resize((1800, int(gray.height * ratio)))
+    gray = gray.filter(ImageFilter.MedianFilter(size=3))
+    gray = ImageEnhance.Contrast(gray).enhance(2.0)
+    gray = ImageEnhance.Sharpness(gray).enhance(1.5)
+    return gray
+
+
+def crop_region(img, region=None):
+    if not region:
+        return img
+    try:
+        x, y, w, h = [int(v) for v in region]
+        x = max(x, 0); y = max(y, 0)
+        return img.crop((x, y, x + max(w, 1), y + max(h, 1)))
+    except Exception:
+        return img
+
 
 def normalize_text(text):
-    text = (text or "").strip()
-    replace_map = {
+    mapping = {
+        "×": "x", "X": "x", "＊": "*",
+        "（": "(", "）": ")",
+        "：": ":", "﹕": ":",
+        "Ｏ": "0", "o": "0", "O": "0",
+        "l": "1", "I": "1", "|": "1",
+        "—": "-", "–": "-",
         " ": "",
-        "×": "x",
-        "X": "x",
-        "：": ":",
-        "O": "0",
-        "o": "0",
-        "I": "1",
-        "l": "1",
-        "|": "1",
-        "（": "(",
-        "）": ")",
-        "＊": "*",
-        "﹡": "*",
     }
-    for old, new in replace_map.items():
-        text = text.replace(old, new)
+    text = text.strip()
+    for a, b in mapping.items():
+        text = text.replace(a, b)
     return text
 
-def is_noise_line(text):
-    low = text.lower()
-    if not text.strip():
+
+def is_noise(line):
+    if not line or not line.strip():
         return True
-    for noise in NOISE_WORDS:
-        if noise.lower() in low:
-            return True
-    if re.match(r"^\d{1,4}[/-]\d{1,2}[/-]\d{1,4}$", text):
+    lower = line.lower()
+    if any(w.lower() in lower for w in NOISE_WORDS):
         return True
-    if re.match(r"^\d{1,2}:\d{2}$", text):
-        return True
-    if re.match(r"^\d{1,3}$", text):
+    if re.fullmatch(r"\d{1,4}[-/]\d{1,2}[-/]\d{1,4}", line):
         return True
     return False
 
-def get_known_products():
-    rows = list_inventory()
-    return [r["product_text"] for r in rows if r.get("product_text")]
 
-def apply_ai_correction(product_name):
-    product_name = normalize_text(product_name)
+def get_known_customers():
+    return [c["name"] for c in list_customers()]
+
+
+def fuzzy_customer_match(name):
+    if not name:
+        return ""
+    candidates = get_known_customers()
+    if not candidates:
+        return name
+    matches = get_close_matches(name, candidates, n=1, cutoff=0.3)
+    return matches[0] if matches else name
+
+
+def apply_corrections(text):
     corrections = get_corrections()
-    if product_name in corrections:
-        return corrections[product_name]
-    known_products = get_known_products()
-    if known_products:
-        matches = get_close_matches(product_name, known_products, n=1, cutoff=0.72)
-        if matches:
-            return matches[0]
-    return product_name
+    if text in corrections:
+        return corrections[text]
+    matches = get_close_matches(text, list(corrections.keys()), n=1, cutoff=0.86)
+    if matches:
+        return corrections[matches[0]]
+    return text
 
-def parse_line(line):
+
+def parse_item_line(line):
+    """
+    Parse lines like:
+    335x46x06 480x6
+    130x42x30=96x10
+    113*12*05=122*3
+    """
     line = normalize_text(line)
-    # split on = or : then quantity
-    patterns = [
-        r"(.+?)[=:](\d+)$",
-        r"(.+?)[x](\d+)$",
-        r"(.+?)\*(\d+)$",
-        r"(.+?)\s+(\d+)$",
-    ]
-    for p in patterns:
-        m = re.match(p, line)
+    line = line.replace("=", " ")
+    line = line.replace("＝", " ")
+    line = re.sub(r"[;；,，]", " ", line)
+    parts = [p for p in re.split(r"\s+", line) if p]
+
+    # Prefer the first piece with a dimension-like pattern.
+    dimension_idx = None
+    for i, p in enumerate(parts):
+        if re.search(r"\d{2,4}x\d{1,4}x\d{1,4}", p) or re.search(r"\d+[x*]\d+[x*]\d+", p):
+            dimension_idx = i
+            break
+    if dimension_idx is None:
+        # fallback
+        if len(parts) >= 2:
+            return parts[0], parts[1]
+        return line, "1"
+
+    product = parts[dimension_idx]
+    qty = "1"
+    if dimension_idx + 1 < len(parts):
+        qty = parts[dimension_idx + 1]
+    if re.fullmatch(r"\d+[x*]\d+", qty) is None:
+        # if qty isn't obvious, look for trailing number
+        m = re.search(r"(\d+[x*]\d+)$", line)
         if m:
-            return m.group(1).strip(), int(m.group(2))
-    return line, 1
+            qty = m.group(1)
+    return product, qty
 
-def parse_ocr_text(text):
-    lines = []
+
+def product_to_qty(qty_text):
+    if not qty_text:
+        return 1
+    m = re.match(r"(\d+)[x*](\d+)", qty_text)
+    if m:
+        return int(m.group(1)) * int(m.group(2))
+    m = re.search(r"(\d+)", qty_text)
+    return int(m.group(1)) if m else 1
+
+
+def group_ocr_lines(data):
+    lines = defaultdict(list)
+    confs = defaultdict(list)
+    for i, txt in enumerate(data.get("text", [])):
+        txt = (txt or "").strip()
+        if not txt:
+            continue
+        try:
+            conf = float(data.get("conf", [0])[i])
+        except Exception:
+            conf = 0.0
+        if conf < 5:
+            continue
+        top = int(data.get("top", [0])[i])
+        line_no = round(top / 12) * 12
+        lines[line_no].append(txt)
+        confs[line_no].append(conf)
+    out = []
+    for k in sorted(lines.keys()):
+        line = "".join(lines[k])
+        if not is_noise(line):
+            out.append((line, sum(confs[k]) / max(len(confs[k]), 1)))
+    return out
+
+
+def process_ocr_text(image_path, region=None, customer_keyword=""):
+    img = preprocess_image(image_path)
+    img = crop_region(img, region)
+
+    raw = pytesseract.image_to_data(img, lang="chi_tra+eng", config="--psm 6", output_type=pytesseract.Output.DICT)
+    lines = group_ocr_lines(raw)
+    confs = [c for _, c in lines]
+    confidence = int(sum(confs) / len(confs)) if confs else 0
+
+    customers = list_customers()
+    customer_name_raw = customer_keyword.strip()
+    if customer_name_raw:
+        customer_name = fuzzy_customer_match(customer_name_raw)
+    else:
+        # try to discover customer-like tokens from OCR first line
+        customer_name = ""
+        for line, _ in lines[:3]:
+            if re.search(r"[\u4e00-\u9fff]{2,6}", line):
+                customer_name = fuzzy_customer_match(re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", line))
+                break
+
+    output_lines = []
     items = []
-    for raw in (text or "").splitlines():
-        raw = raw.strip()
-        if not raw or is_noise_line(raw):
+    for line, _ in lines:
+        fixed = apply_corrections(normalize_text(line))
+        if is_noise(fixed):
             continue
-        product_raw, qty = parse_line(raw)
-        if is_noise_line(product_raw):
-            continue
-        product_fixed = apply_ai_correction(product_raw)
-        items.append({
-            "raw_text": product_raw,
-            "product_text": product_fixed,
-            "product_code": product_fixed.split("=")[0],
-            "qty": qty
-        })
-        lines.append(f"{product_fixed}={qty}")
+        product, qty_text = parse_item_line(fixed)
+        product = apply_corrections(product)
+        qty = product_to_qty(qty_text)
+        if product:
+            items.append({
+                "raw_text": line,
+                "product_name": product,
+                "product": product,
+                "quantity": qty,
+                "qty_text": qty_text
+            })
+            output_lines.append(f"{product}={qty}")
     return {
-        "text": "\n".join(lines),
-        "lines": lines,
-        "items": items
+        "success": True,
+        "text": "\n".join(output_lines),
+        "lines": output_lines,
+        "items": items,
+        "confidence": confidence,
+        "customer_name": customer_name,
+        "warning": "辨識信心偏低，請確認內容" if confidence < 80 else ""
     }
-
-def process_ocr_text(image_path):
-    try:
-        if pytesseract is None:
-            return {"success": False, "duplicate": False, "text": "", "lines": [], "items": [], "confidence": 0}
-        img = preprocess_image(image_path)
-        raw_data = pytesseract.image_to_data(
-            img,
-            lang="chi_tra+eng",
-            config="--psm 6",
-            output_type=pytesseract.Output.DICT
-        )
-        confidence_values = []
-        for conf in raw_data.get("conf", []):
-            try:
-                val = float(conf)
-                if val > 0:
-                    confidence_values.append(val)
-            except Exception:
-                pass
-        avg_confidence = int(sum(confidence_values) / len(confidence_values)) if confidence_values else 0
-
-        text = pytesseract.image_to_string(
-            img,
-            lang="chi_tra+eng",
-            config="--psm 6"
-        )
-        parsed = parse_ocr_text(text)
-        return {
-            "success": True,
-            "duplicate": False,
-            "text": parsed["text"],
-            "lines": parsed["lines"],
-            "items": parsed["items"],
-            "confidence": avg_confidence
-        }
-    except Exception as e:
-        log_error("process_ocr_text", e)
-        return {"success": False, "duplicate": False, "text": "", "lines": [], "items": [], "confidence": 0}
