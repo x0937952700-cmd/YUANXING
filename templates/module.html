@@ -1,184 +1,194 @@
-{% extends 'base.html' %}
-{% set title = '沅興木業｜' ~ page_title %}
+
+{% extends "base.html" %}
 {% block body %}
-<main class="module-shell" data-page="{{ page_key }}">
-  <header class="topbar sticky">
-    <a class="ghost-btn" href="{{ url_for('home') }}">← 回首頁</a>
-    <div class="page-title-wrap">
-      <h1>{{ page_title }}</h1>
-    </div>
-    <div class="top-actions">
-      <a class="ghost-btn icon-btn" href="{{ url_for('settings_page') }}" target="_blank" rel="noopener">設定</a>
-      <button class="ghost-btn icon-btn" id="logout-btn">登出</button>
-    </div>
-  </header>
+<div class="module-screen" data-module="{{ module_key }}">
+  <div class="module-topbar">
+    <a class="back-btn" href="{{ url_for('home') }}">← 返回</a>
+    <div class="module-title">{{ title }}</div>
+    <div class="spacer"></div>
+  </div>
 
-  {% if page_key in ['inventory','order','master_order','ship'] %}
-  <section class="upload-grid">
-    <div class="panel accent-panel">
-      <div class="panel-head">
-        <h2>上傳辨識</h2>
-        <span class="chip">手機拍照 / 相簿上傳</span>
-      </div>
-      <label class="upload-drop" for="file-input">
-        <input id="file-input" type="file" accept="image/*" capture="environment" />
-        <div class="upload-icon">⬆</div>
-        <div class="upload-text">點此上傳圖片</div>
-        <div class="upload-hint">支援拍照、相簿、拖曳上傳</div>
-      </label>
-      <div class="ocr-status-row">
-        <div class="loading-text" id="upload-status">尚未上傳</div>
-        <div class="confidence-pill" id="confidence-pill">信心值：—</div>
-      </div>
-      <textarea id="ocr-text" class="ocr-box" placeholder="OCR 辨識內容會顯示在這裡，可手動修改"></textarea>
-      <div class="form-row">
-        <input id="customer-input" class="text-input" type="text" placeholder="客戶名稱" />
-        <select id="region-input" class="text-input select-input">
-          <option value="北區">北區</option>
-          <option value="中區">中區</option>
-          <option value="南區">南區</option>
-          <option value="未分類">未分類</option>
-        </select>
-      </div>
-      <div class="form-row">
-        <input id="location-input" class="text-input" type="text" placeholder="格位 / 備註（例如 A後排01）" />
-        <input id="operator-input" class="text-input" type="text" value="{{ username }}" readonly />
-      </div>
-      <div class="button-row">
-        <button class="primary-btn" id="confirm-btn">確認送出</button>
-        <button class="secondary-btn" id="clear-btn">清空</button>
-      </div>
-      <div class="result-box" id="result-box"></div>
+  <div class="glass panel upload-panel">
+    <div class="upload-row">
+      <button class="primary-btn" onclick="openAlbumPicker()">上傳檔案（相簿 / 拍照）</button>
+      <button class="ghost-btn" onclick="openCameraPicker()">右下角拍照上傳</button>
+      <button class="ghost-btn" onclick="resetModuleForm()">重新整理</button>
     </div>
+    <input id="album-input" class="hidden" type="file" accept="image/*" multiple>
+    <input id="camera-input" class="hidden" type="file" accept="image/*" capture="environment">
+    <div class="meta-row">
+      <span class="pill" id="ocr-mode-pill">模式：{{ title }}</span>
+      <span class="pill" id="ocr-confidence-pill">信心值：0%</span>
+      <span class="pill warn" id="ocr-warning-pill">尚未辨識</span>
+    </div>
+    <label class="field-label">客戶名稱</label>
+    <input class="text-input" id="customer-name" placeholder="請輸入或點選客戶">
+    <label class="field-label">倉庫格位 / 預設位置</label>
+    <input class="text-input" id="location-input" placeholder="例如：A後排01">
+    <label class="field-label">OCR 文字框（可直接修改）</label>
+    <textarea class="text-area" id="ocr-text" placeholder="辨識後文字會出現在這裡，可人工修改"></textarea>
+    <div class="btn-row">
+      <button class="primary-btn" onclick="confirmSubmit()">確認送出</button>
+      <button class="ghost-btn" onclick="reverseLookup()">反查商品位置</button>
+    </div>
+    <div id="module-result" class="result-card hidden"></div>
+  </div>
 
-    <aside class="panel side-panel">
-      <div class="panel-head">
-        <h2>客戶分類</h2>
-        <span class="chip">可拖曳排序</span>
+  <section class="subsection" id="customer-block" {% if module_key not in ['orders','master_order','ship'] %}style="display:none"{% endif %}>
+    <div class="section-head">
+      <h3>客戶分類</h3>
+      <span class="muted">可拖曳分類，點選查看商品與編輯</span>
+    </div>
+    <div class="category-grid">
+      <div class="category-box" data-region="北區">
+        <div class="category-title">北區</div>
+        <div class="customer-list" id="region-north"></div>
       </div>
-      <div id="customer-groups" class="customer-groups"></div>
-    </aside>
-  </section>
-  {% endif %}
-
-  {% if page_key == 'shipping_records' %}
-  <section class="single-grid">
-    <div class="panel">
-      <div class="panel-head">
-        <h2>出貨查詢</h2>
-        <span class="chip">可選 3 / 7 / 10 / 15 天</span>
+      <div class="category-box" data-region="中區">
+        <div class="category-title">中區</div>
+        <div class="customer-list" id="region-center"></div>
       </div>
-      <div class="form-row">
-        <select id="days-filter" class="text-input select-input">
-          <option value="3">3 天內</option>
-          <option value="7" selected>7 天內</option>
-          <option value="10">10 天內</option>
-          <option value="15">15 天內</option>
-          <option value="30">30 天內</option>
-          <option value="">全部</option>
-        </select>
-        <button class="primary-btn" id="query-shipping-btn">查詢</button>
-      </div>
-      <div class="table-wrap">
-        <table class="data-table">
-          <thead>
-            <tr><th>時間</th><th>客戶</th><th>商品</th><th>數量</th><th>操作人員</th><th>扣除明細</th></tr>
-          </thead>
-          <tbody id="shipping-tbody"></tbody>
-        </table>
+      <div class="category-box" data-region="南區">
+        <div class="category-title">南區</div>
+        <div class="customer-list" id="region-south"></div>
       </div>
     </div>
   </section>
-  {% endif %}
 
-  {% if page_key == 'customers' %}
-  <section class="single-grid">
-    <div class="panel customer-admin-layout">
-      <div class="panel-head">
-        <h2>客戶資料</h2>
-        <span class="chip">可拖曳分類、手動編輯</span>
+  <section class="subsection" id="inventory-summary-section" {% if module_key != 'inventory' %}style="display:none"{% endif %}>
+    <div class="section-head">
+      <h3>庫存清單</h3>
+      <span class="muted">未放入倉庫圖的商品會以紅色標示</span>
+    </div>
+    <div id="inventory-summary" class="card-list"></div>
+  </section>
+
+  <section class="subsection" id="shipping-query-section" {% if module_key != 'shipping_query' %}style="display:none"{% endif %}>
+    <div class="section-head">
+      <h3>出貨查詢</h3>
+    </div>
+    <div class="query-bar">
+      <select id="ship-range" class="text-input small">
+        <option value="3">3 天內</option>
+        <option value="7" selected>7 天內</option>
+        <option value="10">10 天內</option>
+        <option value="15">15 天內</option>
+        <option value="custom">自訂日期</option>
+      </select>
+      <input id="ship-start" class="text-input small" type="date">
+      <input id="ship-end" class="text-input small" type="date">
+      <button class="primary-btn" onclick="loadShippingRecords()">查詢</button>
+    </div>
+    <div id="shipping-results" class="table-card"></div>
+  </section>
+
+  <section class="subsection" id="warehouse-section" {% if module_key != 'warehouse' %}style="display:none"{% endif %}>
+    <div class="section-head">
+      <h3>倉庫圖</h3>
+      <span class="muted">A 區 / B 區、12 欄、前後格位、拖曳移動、手動編輯</span>
+    </div>
+    <div class="search-row">
+      <input id="warehouse-search" class="text-input" placeholder="搜尋商品 / 客戶 / 格位，例如 113">
+      <button class="primary-btn" onclick="searchWarehouse()">搜尋</button>
+      <button class="ghost-btn" onclick="renderWarehouse()">清除搜尋</button>
+    </div>
+    <div id="warehouse-search-results" class="search-results hidden"></div>
+    <div class="warehouse-zone-wrap">
+      <div class="zone-card" id="zone-A">
+        <div class="zone-title">A 區</div>
+        <div class="zone-grid" id="zone-A-grid"></div>
       </div>
-      <div class="customer-admin-columns">
-        <div id="customer-admin-list" class="customer-admin-list"></div>
-        <div class="customer-detail-card">
-          <h3>客戶明細</h3>
-          <div id="customer-detail-empty" class="muted">點選左側客戶後顯示</div>
-          <div id="customer-detail-form" class="hidden">
-            <input id="detail-name" class="text-input" type="text" placeholder="客戶名稱" />
-            <input id="detail-phone" class="text-input" type="text" placeholder="電話" />
-            <input id="detail-address" class="text-input" type="text" placeholder="地址" />
-            <textarea id="detail-special" class="ocr-box small" placeholder="特殊要求"></textarea>
-            <select id="detail-region" class="text-input select-input">
-              <option value="北區">北區</option>
-              <option value="中區">中區</option>
-              <option value="南區">南區</option>
-              <option value="未分類">未分類</option>
-            </select>
-            <div class="button-row">
-              <button class="primary-btn" id="save-customer-btn">儲存</button>
-              <button class="secondary-btn" id="delete-customer-btn">刪除</button>
-            </div>
-            <div id="customer-products" class="customer-products"></div>
-          </div>
+      <div class="zone-card" id="zone-B">
+        <div class="zone-title">B 區</div>
+        <div class="zone-grid" id="zone-B-grid"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="subsection" id="customers-section" {% if module_key != 'customers' %}style="display:none"{% endif %}>
+    <div class="section-head">
+      <h3>客戶資料</h3>
+      <span class="muted">可手動編輯名稱、電話、地址、特殊要求</span>
+    </div>
+    <div class="customer-editor">
+      <div class="customer-detail glass">
+        <label class="field-label">客戶名稱</label>
+        <input class="text-input" id="cust-name">
+        <label class="field-label">電話</label>
+        <input class="text-input" id="cust-phone">
+        <label class="field-label">地址</label>
+        <input class="text-input" id="cust-address">
+        <label class="field-label">特殊要求</label>
+        <textarea class="text-area small" id="cust-notes"></textarea>
+        <label class="field-label">區域</label>
+        <select id="cust-region" class="text-input">
+          <option>北區</option><option>中區</option><option>南區</option>
+        </select>
+        <button class="primary-btn" onclick="saveCustomer()">儲存客戶</button>
+      </div>
+      <div class="customer-board">
+        <div class="customer-search-row">
+          <input id="customer-search" class="text-input" placeholder="搜尋客戶">
+          <button class="primary-btn" onclick="renderCustomers()">搜尋</button>
+        </div>
+        <div class="category-grid">
+          <div class="category-box" data-region="北區"><div class="category-title">北區</div><div class="customer-list" id="customers-north"></div></div>
+          <div class="category-box" data-region="中區"><div class="category-title">中區</div><div class="customer-list" id="customers-center"></div></div>
+          <div class="category-box" data-region="南區"><div class="category-title">南區</div><div class="customer-list" id="customers-south"></div></div>
+        </div>
+        <div class="glass panel" id="customer-products-panel">
+          <div class="section-title">客戶商品</div>
+          <div id="customer-products" class="card-list"></div>
         </div>
       </div>
-      <div class="panel-subtitle">上方卡片可拖曳調整順序</div>
     </div>
   </section>
-  {% endif %}
 
-  {% if page_key == 'warehouse' %}
-  <section class="single-grid">
-    <div class="panel">
-      <div class="panel-head">
-        <h2>倉庫圖</h2>
-        <span class="chip">A 區 / B 區，各 6 欄，分前後</span>
+  <section class="subsection" id="default-module-info" {% if module_key in ['warehouse','customers','inventory','shipping_query'] %}style="display:none"{% endif %}>
+    <div class="glass panel">
+      <div class="section-title">流程</div>
+      <div class="steps">
+        <div class="step">上傳 / 拍照</div>
+        <div class="step">OCR</div>
+        <div class="step">人工修正</div>
+        <div class="step">確認送出</div>
       </div>
-      <div class="warehouse-actions">
-        <button class="primary-btn" id="refresh-warehouse-btn">重新整理</button>
-        <button class="secondary-btn" id="add-warehouse-cell-btn">新增格位</button>
-      </div>
-      <div id="warehouse-grid" class="warehouse-grid"></div>
+      <div class="muted">依你目前需求：頁面要新分頁、版面垂直置中、功能只保留必要項目。</div>
     </div>
   </section>
-  {% endif %}
 
-  {% if page_key == 'settings' %}
-  <section class="settings-grid">
-    <div class="panel">
-      <div class="panel-head"><h2>變更密碼</h2></div>
-      <div class="form-stack narrow">
-        <input id="old-password" class="text-input" type="password" placeholder="舊密碼" />
-        <input id="new-password" class="text-input" type="password" placeholder="新密碼" />
-        <input id="confirm-password" class="text-input" type="password" placeholder="再次輸入新密碼" />
-        <button class="primary-btn" id="change-password-btn">儲存密碼</button>
+  <input id="selected-item-json" type="hidden">
+  <div id="warehouse-modal" class="modal hidden">
+    <div class="modal-card glass">
+      <div class="modal-head">
+        <div class="section-title">格位編輯</div>
+        <button class="icon-btn" onclick="closeWarehouseModal()">✕</button>
       </div>
-    </div>
-
-    <div class="panel">
-      <div class="panel-head"><h2>備份</h2></div>
-      <div class="button-row">
-        <button class="primary-btn" id="backup-btn">立即備份</button>
-        <button class="secondary-btn" id="reload-backups-btn">重新整理列表</button>
+      <div id="warehouse-modal-meta" class="muted"></div>
+      <label class="field-label">搜尋已錄入商品</label>
+      <input id="warehouse-item-search" class="text-input" placeholder="輸入 113 直接篩選">
+      <label class="field-label">加入商品</label>
+      <select id="warehouse-item-select" class="text-input"></select>
+      <label class="field-label">加入數量</label>
+      <input id="warehouse-add-qty" class="text-input" type="number" min="1" value="1">
+      <div class="btn-row">
+        <button class="primary-btn" onclick="addSelectedItemToCell()">加入格位</button>
+        <button class="ghost-btn" onclick="saveWarehouseCell()">儲存格位</button>
       </div>
-      <div id="backup-list" class="backup-list"></div>
+      <label class="field-label">格位備註</label>
+      <textarea id="warehouse-note" class="text-area small"></textarea>
+      <div id="warehouse-cell-items" class="chip-list"></div>
     </div>
-  </section>
-  {% endif %}
-</main>
+  </div>
 
-<div id="modal" class="modal hidden">
-  <div class="modal-card">
-    <div class="modal-head">
-      <h3 id="modal-title">編輯</h3>
-      <button class="ghost-btn" id="modal-close">✕</button>
+  <div id="customer-modal" class="modal hidden">
+    <div class="modal-card glass">
+      <div class="modal-head">
+        <div class="section-title">客戶明細</div>
+        <button class="icon-btn" onclick="closeCustomerModal()">✕</button>
+      </div>
+      <div id="customer-modal-body"></div>
     </div>
-    <div id="modal-body"></div>
   </div>
 </div>
-
-<script>
-  window.PAGE_KEY = {{ page_key|tojson }};
-  window.PAGE_TITLE = {{ page_title|tojson }};
-</script>
 {% endblock %}
