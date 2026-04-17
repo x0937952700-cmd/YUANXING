@@ -1,978 +1,1048 @@
 
-const App = {
-  state: {
-    module: window.APP_CONFIG?.module || null,
-    inventory: window.APP_CONFIG?.inventory || [],
-    orders: window.APP_CONFIG?.orders || [],
-    masters: window.APP_CONFIG?.masters || [],
-    shippingRecords: window.APP_CONFIG?.shippingRecords || [],
-    customers: window.APP_CONFIG?.customers || [],
-    warehouseA: window.APP_CONFIG?.warehouseA || [],
-    warehouseB: window.APP_CONFIG?.warehouseB || [],
-    notifications: window.APP_CONFIG?.notifications || [],
-    logs: window.APP_CONFIG?.logs || [],
-    discrepancies: window.APP_CONFIG?.discrepancies || [],
-    summary: window.APP_CONFIG?.summary || {},
-    backups: window.APP_CONFIG?.backups || [],
-    settings: window.APP_CONFIG?.settings || [],
-    activeZone: 'A',
-    editMode: true,
-    lastNotifId: 0,
-    ocrCache: {},
-    loaded: false,
-  },
-
-  initLogin() {
-    const user = localStorage.getItem('username') || '';
-    const pass = localStorage.getItem('password') || '';
-    if (user) document.getElementById('username').value = user;
-    if (pass) document.getElementById('password').value = pass;
-    const remember = localStorage.getItem('remember') !== '0';
-    const saveCreds = localStorage.getItem('saveCreds') === '1';
-    document.getElementById('remember').checked = remember;
-    document.getElementById('saveCreds').checked = saveCreds;
-    if (user && pass) {
-      App.login(true);
-    }
-  },
-
-  toast(title, message='', type='good', timeout=2400) {
-    const wrap = document.getElementById('toastContainer');
-    if (!wrap) return;
-    const node = document.createElement('div');
-    node.className = `toast ${type}`;
-    node.innerHTML = `<strong>${title}</strong>${message ? `<div>${message}</div>` : ''}`;
-    wrap.appendChild(node);
-    setTimeout(() => {
-      node.style.opacity = '0';
-      node.style.transform = 'translateY(-8px)';
-      node.style.transition = 'all .2s ease';
-      setTimeout(() => node.remove(), 240);
-    }, timeout);
-  },
-
-  openModal(title, html) {
-    document.getElementById('modalTitle').innerText = title;
-    document.getElementById('modalContent').innerHTML = html;
-    document.getElementById('modalBackdrop').classList.add('show');
-  },
-
-  closeModal() {
-    document.getElementById('modalBackdrop').classList.remove('show');
-  },
-
-  async fetchJSON(url, options={}) {
-    const res = await fetch(url, {
-      headers: { 'Accept': 'application/json', ...(options.headers || {}) },
-      ...options
-    });
-    const txt = await res.text();
-    let data;
-    try { data = JSON.parse(txt); }
-    catch (e) {
-      console.error('Non-JSON response:', txt);
-      throw new Error('伺服器回傳格式錯誤');
-    }
-    if (!res.ok || data.success === false) {
-      throw new Error(data.error || `HTTP ${res.status}`);
-    }
-    return data;
-  },
-
-  async login(auto=false) {
-    const username = (document.getElementById('username').value || '').trim();
-    const password = (document.getElementById('password').value || '').trim();
-    const remember = !!document.getElementById('remember').checked;
-    const saveCreds = !!document.getElementById('saveCreds').checked;
-    if (!username || !password) {
-      if (!auto) App.toast('請輸入帳號與密碼', '', 'warn');
-      return;
-    }
-    try {
-      const data = await App.fetchJSON('/api/login', {
-        method: 'POST',
-        body: JSON.stringify({ username, password, remember })
-      });
-      localStorage.setItem('username', username);
-      localStorage.setItem('remember', remember ? '1' : '0');
-      localStorage.setItem('saveCreds', saveCreds ? '1' : '0');
-      if (saveCreds) localStorage.setItem('password', password);
-      else localStorage.removeItem('password');
-      App.toast('登入成功', username, 'good');
-      window.location.href = '/';
-    } catch (e) {
-      if (!auto) App.toast('登入失敗', e.message, 'bad');
-    }
-  },
-
-  async changePassword() {
-    try {
-      await App.fetchJSON('/api/change_password', {
-        method: 'POST',
-        body: JSON.stringify({
-          old_password: document.getElementById('oldPassword').value.trim(),
-          new_password: document.getElementById('newPassword').value.trim(),
-          confirm_password: document.getElementById('confirmPassword').value.trim(),
-        })
-      });
-      App.toast('密碼已修改', '', 'good');
-      ['oldPassword','newPassword','confirmPassword'].forEach(id => document.getElementById(id).value = '');
-    } catch (e) {
-      App.toast('修改失敗', e.message, 'bad');
-    }
-  },
-
-  pickFile(module) {
-    const input = document.getElementById(`${module}File`);
-    if (input) input.click();
-  },
-
-  triggerCamera(module) {
-    const input = document.getElementById(`${module}File`);
-    if (input) input.click();
-  },
-
-  async handleUpload(module, input) {
-    if (!input.files || !input.files[0]) return;
-    const file = input.files[0];
-    const confidenceNode = document.getElementById(`${module}Confidence`);
-    const textNode = document.getElementById(`${module}OcrText`);
-    if (confidenceNode) confidenceNode.innerText = '辨識中...';
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('blue_only', '1');
-      const res = await fetch('/api/upload_ocr', { method: 'POST', body: formData });
-      const text = await res.text();
-      let data;
-      try { data = JSON.parse(text); } catch (e) { throw new Error('伺服器回傳格式錯誤'); }
-      if (!res.ok || data.success === false) throw new Error(data.error || 'OCR失敗');
-      if (textNode) textNode.value = data.text || '';
-      if (confidenceNode) confidenceNode.innerText = `${data.confidence || 0}%`;
-      if (data.warning) App.toast('提醒', data.warning, 'warn');
-      if (data.duplicate) App.toast('重複圖片', '仍已輸出辨識結果', 'good');
-      App.state.ocrCache[module] = data.text || '';
-      if (data.customer_guess && document.getElementById(`${module}Customer`)) {
-        document.getElementById(`${module}Customer`).value = data.customer_guess;
-      }
-      App.renderPreview(module, data);
-      App.toast('OCR 完成', `${(data.items || []).length} 筆`, 'good');
-    } catch (e) {
-      if (confidenceNode) confidenceNode.innerText = '--';
-      App.toast('OCR 失敗', e.message, 'bad');
-    } finally {
-      input.value = '';
-    }
-  },
-
-
-  renderCustomerChips(module) {
-    const el = document.getElementById(`${module}CustomerChips`);
-    if (!el) return;
-    const groups = {
-      '北區': ['北區','north','N'],
-      '中區': ['中區','central','C'],
-      '南區': ['南區','south','S'],
-      '其他': []
-    };
-    const customers = App.state.customers || [];
-    const byRegion = { '北區': [], '中區': [], '南區': [], '其他': [] };
-    customers.forEach(c => {
-      const region = (c.region || '').trim();
-      if (region.includes('北')) byRegion['北區'].push(c);
-      else if (region.includes('中')) byRegion['中區'].push(c);
-      else if (region.includes('南')) byRegion['南區'].push(c);
-      else byRegion['其他'].push(c);
-    });
-    el.innerHTML = Object.keys(byRegion).map(region => `
-      <div class="card soft" style="padding:12px;border-radius:18px">
-        <div class="toolbar">
-          <strong>${region}</strong>
-          <span class="small muted">可拖曳分類</span>
-        </div>
-        <div class="chips" data-region="${region}" ondragover="event.preventDefault()" ondrop="App.dropCustomerRegion(event, '${region}')">
-          ${byRegion[region].map(c => `
-            <span class="chip" draggable="true" ondragstart="App.dragCustomer(event, ${JSON.stringify(c.customer_name || '')}, ${JSON.stringify(c.region || '')})" onclick="App.chooseCustomer('${module}', ${JSON.stringify(c.customer_name || '')})">
-              ${c.customer_name || ''}
-            </span>
-          `).join('')}
-        </div>
-      </div>
-    `).join('');
-  },
-
-  dragCustomer(ev, name, region) {
-    ev.dataTransfer.setData('text/plain', JSON.stringify({ name, region }));
-  },
-
-  async dropCustomerRegion(ev, region) {
-    ev.preventDefault();
-    try {
-      const data = JSON.parse(ev.dataTransfer.getData('text/plain'));
-      if (!data.name) return;
-      await App.fetchJSON('/api/customers/update', {
-        method: 'POST',
-        body: JSON.stringify({ customer_name: data.name, region })
-      });
-      App.toast('已分類', `${data.name} → ${region}`, 'good');
-      await App.loadCustomers();
-      if (['orders','master_orders','shipping'].includes(App.state.module)) App.renderCustomerChips(App.state.module);
-    } catch (e) {
-      App.toast('分類失敗', e.message, 'bad');
-    }
-  },
-
-  renderPreview(module, data) {
-    const el = document.getElementById(`${module}Preview`);
-    if (!el) return;
-    const items = data.items || [];
-    el.innerHTML = items.map((item, idx) => `
-      <div class="list-item">
-        <div class="meta">
-          <div class="title">${item.product || item.product_name || ''}</div>
-          <div class="desc">${item.quantity || 1}</div>
-        </div>
-        <div class="small">#${idx+1}</div>
-      </div>
-    `).join('') || '<div class="note-box">尚未辨識到內容</div>';
-  },
-
-  searchCustomers(q, module) {
-    const box = document.getElementById(`${module}CustomerSug`);
-    const list = App.state.customers || [];
-    if (!box) return;
-    const query = (q || '').trim();
-    if (!query) {
-      box.style.display = 'none';
-      box.innerHTML = '';
-      return;
-    }
-    const matches = list
-      .map(x => x.customer_name || '')
-      .filter(name => name.includes(query) || query.split('').every(ch => name.includes(ch)))
-      .slice(0, 12);
-    box.innerHTML = matches.map(name => `<div class="suggestion" onclick="App.chooseCustomer('${module}', ${JSON.stringify(name)})">${name}</div>`).join('');
-    box.style.display = matches.length ? 'block' : 'none';
-  },
-
-  chooseCustomer(module, name) {
-    const input = document.getElementById(`${module}Customer`);
-    const box = document.getElementById(`${module}CustomerSug`);
-    if (input) input.value = name;
-    if (box) { box.style.display = 'none'; box.innerHTML = ''; }
-  },
-
-  async submitModule(module) {
-    try {
-      const customer = (document.getElementById(`${module}Customer`)?.value || '').trim();
-      const ocr = (document.getElementById(`${module}OcrText`)?.value || '').trim();
-      const items = App.parseOcrLines(ocr);
-      const payload = { customer, items, note: '' };
-      let url = '';
-      if (module === 'inventory') {
-        url = '/api/inventory';
-        payload.items = items;
-        // inventory direct products, no customer categories
-      } else if (module === 'orders') {
-        url = '/api/orders';
-      } else if (module === 'master_orders') {
-        url = '/api/master_orders';
-      } else if (module === 'shipping') {
-        url = '/api/ship';
-      }
-      if (!url) return;
-      if (!items.length && module !== 'shipping') {
-        App.toast('請先輸入內容', '', 'warn');
-        return;
-      }
-      if (module === 'shipping') {
-        if (!confirm('出貨前再次確認？')) return;
-      }
-      await App.fetchJSON(url, {
-        method: 'POST',
-        body: JSON.stringify({ customer, items, note: '' })
-      });
-      App.toast('已送出', module === 'shipping' ? '完成出貨' : '資料已建立', 'good');
-      // Learn corrections after manual edits
-      App.learnCorrection(module);
-      setTimeout(() => location.reload(), 700);
-    } catch (e) {
-      App.toast('送出失敗', e.message, 'bad');
-    }
-  },
-
-  parseOcrLines(text) {
-    const lines = (text || '').split('\n').map(x => x.trim()).filter(Boolean);
-    return lines.map(line => {
-      let p = line;
-      let qty = 1;
-      const m = line.match(/(.+?)[=\*xX](\d+)$/);
-      if (m) { p = m[1]; qty = parseInt(m[2], 10) || 1; }
-      return { product: p, quantity: qty };
-    });
-  },
-
-  async learnCorrection(module) {
-    const original = App.state.ocrCache[module] || '';
-    const edited = (document.getElementById(`${module}OcrText`)?.value || '').trim();
-    if (!original || !edited || original === edited) return;
-    const origLines = original.split('\n').filter(Boolean);
-    const editLines = edited.split('\n').filter(Boolean);
-    // simple line-by-line learning
-    for (let i = 0; i < Math.min(origLines.length, editLines.length); i++) {
-      if (origLines[i] !== editLines[i]) {
-        try {
-          await App.fetchJSON('/api/save_correction', {
-            method: 'POST',
-            body: JSON.stringify({ wrong_text: origLines[i], correct_text: editLines[i] })
-          });
-        } catch (e) {}
-      }
-    }
-  },
-
-  filterInventory(q) {
-    const rows = document.querySelectorAll('#inventoryTable tr');
-    const query = (q || '').trim();
-    rows.forEach(row => {
-      const t = row.innerText;
-      row.style.display = !query || t.includes(query) ? '' : 'none';
-    });
-  },
-
-  filterShipDays(days) {
-    App.loadShippingRecords(days);
-  },
-
-  async loadShippingRecords(days='') {
-    try {
-      const url = days ? `/api/shipping_records?days=${encodeURIComponent(days)}` : '/api/shipping_records';
-      const data = await App.fetchJSON(url);
-      const tbody = document.getElementById('shippingRecordsTable');
-      if (!tbody) return;
-      tbody.innerHTML = data.records.map(r => `
-        <tr>
-          <td>${r.customer || ''}</td>
-          <td>${r.product || ''}</td>
-          <td>${r.qty || 0}</td>
-          <td>${r.operator || ''}</td>
-          <td>${r.shipped_at || ''}</td>
-          <td>${r.detail || ''}</td>
-        </tr>
-      `).join('') || '<tr><td colspan="6" class="center-note">尚無出貨資料</td></tr>';
-    } catch (e) {}
-  },
-
-  async loadCustomers() {
-    try {
-      const data = await App.fetchJSON('/api/customers');
-      App.state.customers = data.items || [];
-      const tbody = document.getElementById('customersTable');
-      if (!tbody) return;
-      tbody.innerHTML = data.items.map(c => `
-        <tr>
-          <td><input class="input" data-customer-name="${c.customer_name}" value="${c.customer_name || ''}" disabled></td>
-          <td><input class="input" id="phone-${encodeURIComponent(c.customer_name)}" value="${c.phone || ''}"></td>
-          <td><input class="input" id="address-${encodeURIComponent(c.customer_name)}" value="${c.address || ''}"></td>
-          <td><input class="input" id="special-${encodeURIComponent(c.customer_name)}" value="${c.special_requests || ''}"></td>
-          <td><input class="input" id="region-${encodeURIComponent(c.customer_name)}" value="${c.region || ''}"></td>
-          <td><button class="primary" onclick="App.saveCustomer(${JSON.stringify(c.customer_name)})">儲存</button></td>
-        </tr>
-      `).join('') || '<tr><td colspan="6" class="center-note">尚無客戶資料</td></tr>';
-      if (['orders','master_orders','shipping'].includes(App.state.module)) App.renderCustomerChips(App.state.module);
-    } catch (e) {}
-  },
-
-  async saveCustomer(name) {
-    try {
-      const enc = encodeURIComponent(name);
-      await App.fetchJSON('/api/customers/update', {
-        method: 'POST',
-        body: JSON.stringify({
-          customer_name: name,
-          phone: document.getElementById(`phone-${enc}`)?.value || '',
-          address: document.getElementById(`address-${enc}`)?.value || '',
-          special_requests: document.getElementById(`special-${enc}`)?.value || '',
-          region: document.getElementById(`region-${enc}`)?.value || '',
-        })
-      });
-      App.toast('已儲存', name, 'good');
-      App.reloadCustomers();
-    } catch (e) {
-      App.toast('儲存失敗', e.message, 'bad');
-    }
-  },
-
-  async reloadCustomers() {
-    await App.loadCustomers();
-  },
-
-  renderInventory() {
-    const tbody = document.getElementById('inventoryTable');
-    if (!tbody) return;
-    const rows = (window.APP_CONFIG.rawInventory || App.state.inventory || []).length ? (window.APP_CONFIG.rawInventory || App.state.inventory) : App.state.inventory;
-    const items = App.state.inventory || [];
-    tbody.innerHTML = items.map(item => {
-      const isRed = item.is_unplaced || !item.locations || !item.locations.length;
-      const loc = (item.locations || []).join(', ');
-      const cust = (item.customers || []).join(', ');
-      return `
-        <tr class="${isRed ? 'red' : ''}">
-          <td>${item.product || ''}</td>
-          <td>${item.quantity || 0}</td>
-          <td class="${isRed ? 'red' : ''}">${loc || '未上架'}</td>
-          <td>${cust || ''}</td>
-          <td>${isRed ? '<span class="red">尚未錄入倉庫圖</span>' : '<span class="green">已上架</span>'}</td>
-        </tr>
-      `;
-    }).join('') || '<tr><td colspan="5" class="center-note">尚無庫存資料</td></tr>';
-    App.filterInventory(document.getElementById('inventorySearch')?.value || '');
-  },
-
-  renderOrders() {
-    const tbody = document.getElementById('ordersTable');
-    if (!tbody) return;
-    tbody.innerHTML = (App.state.orders || []).map(o => `
-      <tr>
-        <td>${o.customer || ''}</td>
-        <td>${o.product || ''}</td>
-        <td>${o.qty || 0}</td>
-        <td>${o.status || ''}</td>
-        <td>${o.created_at || ''}</td>
-      </tr>
-    `).join('') || '<tr><td colspan="5" class="center-note">尚無訂單資料</td></tr>';
-  },
-
-  renderMasters() {
-    const tbody = document.getElementById('mastersTable');
-    if (!tbody) return;
-    tbody.innerHTML = (App.state.masters || []).map(m => `
-      <tr>
-        <td>${m.product || ''}</td>
-        <td>${m.qty || 0}</td>
-        <td>${m.updated_at || ''}</td>
-      </tr>
-    `).join('') || '<tr><td colspan="3" class="center-note">尚無總單資料</td></tr>';
-  },
-
-  renderSummaryCards() {
-    const s = App.state.summary || {};
-    const el = document.getElementById('todayStats');
-    if (!el) return;
-    el.innerHTML = `
-      <div class="stat"><div class="label">今日新增</div><div class="value">${s.order_count || 0}</div></div>
-      <div class="stat"><div class="label">今日出貨</div><div class="value">${s.today_ship_count || 0}</div></div>
-      <div class="stat"><div class="label">未上架商品</div><div class="value">${s.unplaced_count || 0}</div></div>
-    `;
-  },
-
-  renderNotifications() {
-    const list = document.getElementById('notificationsList');
-    const logsTable = document.getElementById('logsTable');
-    const reconcileList = document.getElementById('reconcileList');
-    const reconcileList2 = document.getElementById('reconcileList2');
-    const unplacedList = document.getElementById('unplacedList');
-    const shipSummary = document.getElementById('shipSummary');
-    const settingsList = document.getElementById('settingsList');
-
-    if (list) {
-      list.innerHTML = (App.state.notifications || []).map(n => `
-        <div class="list-item clickable" onclick="App.markNotificationsRead(); App.toast('${n.title || ''}','${n.message || ''}','good')">
-          <div class="meta">
-            <div class="title">${n.title || ''}</div>
-            <div class="desc">${n.created_at || ''} ｜ ${n.message || ''}</div>
-          </div>
-          <div class="small">${n.category || ''}</div>
-        </div>
-      `).join('') || '<div class="center-note">尚無通知</div>';
-    }
-
-    if (logsTable) {
-      logsTable.innerHTML = (App.state.logs || []).map(l => `
-        <tr>
-          <td>${l.username || ''}</td>
-          <td>${l.created_at || ''}</td>
-          <td>${l.action || ''}</td>
-          <td>${[l.target_type || '', l.target_name || ''].filter(Boolean).join(' / ')}</td>
-          <td>${l.detail || ''}</td>
-        </tr>
-      `).join('') || '<tr><td colspan="5" class="center-note">尚無操作歷史</td></tr>';
-    }
-
-    const renderReconcile = target => {
-      if (!target) return;
-      target.innerHTML = (App.state.discrepancies || []).map(d => `
-        <div class="list-item">
-          <div class="meta">
-            <div class="title">${d.customer || ''}｜${d.product || ''}</div>
-            <div class="desc">總單:${d.master_qty} / 訂單:${d.order_qty} / 出貨:${d.ship_qty} / 庫存:${d.inventory_qty}</div>
-          </div>
-          <div class="small red">差異</div>
-        </div>
-      `).join('') || '<div class="center-note">沒有差異</div>';
-    };
-    renderReconcile(reconcileList);
-    renderReconcile(reconcileList2);
-
-    if (unplacedList) {
-      unplacedList.innerHTML = (App.state.summary?.unplaced_items || []).map(i => `
-        <div class="list-item">
-          <div class="meta">
-            <div class="title red">${i.product || ''}</div>
-            <div class="desc">數量 ${i.quantity || 0}</div>
-          </div>
-          <div class="small red">未上架</div>
-        </div>
-      `).join('') || '<div class="center-note">全部已上架</div>';
-    }
-
-    if (shipSummary) {
-      shipSummary.innerHTML = (App.state.orders || []).slice(0,10).map(o => `
-        <div class="list-item">
-          <div class="meta">
-            <div class="title">${o.customer || ''}</div>
-            <div class="desc">${o.product || ''} × ${o.qty || 0}</div>
-          </div>
-          <div class="small">${o.status || ''}</div>
-        </div>
-      `).join('') || '<div class="center-note">尚無需出貨的項目</div>';
-    }
-
-    if (settingsList) {
-      settingsList.innerHTML = (App.state.settings || []).map(s => `
-        <div class="list-item">
-          <div class="meta">
-            <div class="title">${s.key || ''}</div>
-            <div class="desc">${s.value || ''}</div>
-          </div>
-        </div>
-      `).join('') || '<div class="center-note">尚無設定</div>';
-    }
-  },
-
-  showZone(zone) {
-    App.state.activeZone = zone;
-    document.getElementById('zoneA')?.classList.toggle('active', zone === 'A');
-    document.getElementById('zoneB')?.classList.toggle('active', zone === 'B');
-    document.getElementById('zoneBtnA')?.classList.toggle('active', zone === 'A');
-    document.getElementById('zoneBtnB')?.classList.toggle('active', zone === 'B');
-  },
-
-  toggleWarehouseView() {
-    App.state.editMode = !App.state.editMode;
-    App.toast('模式切換', App.state.editMode ? '編輯模式' : '檢視模式', 'good');
-  },
-
-  slotLabel(slot) {
-    if (!slot) return '<span class="slot-label">空格</span>';
-    return `
-      <div class="slot-customer">${slot.customer_name || ''}</div>
-      <div class="slot-product">${slot.product || ''} ${slot.quantity ? '×' + slot.quantity : ''}</div>
-      <div class="slot-label">${slot.note || ''}</div>
-    `;
-  },
-
-  renderWarehouse(zone, bands) {
-    const root = document.getElementById(zone === 'A' ? 'zoneA' : 'zoneB');
-    if (!root) return;
-    const html = `
-      <div class="zone-shell">
-        <div class="zone-label">${zone}</div>
-        <div class="band-list">
-          ${bands.map(b => `
-            <div class="band">
-              <div class="band-num">${b.band_no}</div>
-              <div class="band-body">
-                <div class="row-label">前排</div>
-                <div class="cell-row">
-                  ${b.front.map((slot, idx) => App.renderSlot(zone, b.band_no, 'front', idx+1, slot)).join('')}
-                </div>
-                <div class="row-label">後排</div>
-                <div class="cell-row">
-                  ${b.back.map((slot, idx) => App.renderSlot(zone, b.band_no, 'back', idx+1, slot)).join('')}
-                </div>
-              </div>
-            </div>
-          `).join('')}
-        </div>
-      </div>
-    `;
-    root.innerHTML = html;
-  },
-
-  renderSlot(zone, bandNo, rowLabel, cellNo, slot) {
-    const empty = !slot;
-    const classes = ['slot', empty ? 'empty' : '', slot && !slot.product ? 'unplaced' : ''].join(' ').trim();
-    const slotKey = `${zone}-${bandNo}-${rowLabel}-${cellNo}`;
-    return `
-      <div class="${classes}" data-zone="${zone}" data-band="${bandNo}" data-row="${rowLabel}" data-cell="${cellNo}"
-           draggable="true"
-           ondragstart="App.dragStart(event)"
-           ondragover="App.dragOver(event)"
-           ondrop="App.dropCell(event)"
-           onclick="App.openCellEditor('${zone}', ${bandNo}, '${rowLabel}', ${cellNo})">
-        <div class="slot-key">${slotKey}</div>
-        ${App.slotLabel(slot)}
-      </div>
-    `;
-  },
-
-  dragStart(ev) {
-    const el = ev.currentTarget;
-    ev.dataTransfer.setData('text/plain', JSON.stringify({
-      zone: el.dataset.zone,
-      band: el.dataset.band,
-      row: el.dataset.row,
-      cell: el.dataset.cell
-    }));
-  },
-
-  dragOver(ev) {
-    ev.preventDefault();
-    ev.currentTarget.classList.add('dragover');
-  },
-
-  async dropCell(ev) {
-    ev.preventDefault();
-    const target = ev.currentTarget;
-    target.classList.remove('dragover');
-    try {
-      const source = JSON.parse(ev.dataTransfer.getData('text/plain'));
-      const srcData = await App.getSlot(source.zone, source.band, source.row, source.cell);
-      const tgtData = await App.getSlot(target.dataset.zone, target.dataset.band, target.dataset.row, target.dataset.cell);
-      await App.saveSlot(target.dataset.zone, target.dataset.band, target.dataset.row, target.dataset.cell, srcData);
-      await App.saveSlot(source.zone, source.band, source.row, source.cell, tgtData);
-      App.toast('已移動', '格位拖曳完成', 'good');
-      await App.loadWarehouse();
-    } catch (e) {
-      App.toast('拖曳失敗', e.message, 'bad');
-    }
-  },
-
-  async getSlot(zone, band, row, cell) {
-    const data = await App.fetchJSON(`/api/warehouse?zone=${zone}`);
-    const bands = data.bands || [];
-    const bandObj = bands.find(x => String(x.band_no) === String(band));
-    const arr = bandObj ? (row === 'front' ? bandObj.front : bandObj.back) : [];
-    return arr[Number(cell)-1] || null;
-  },
-
-  async saveSlot(zone, band, row, cell, slot) {
-    const payload = {
-      zone, band_no: Number(band), row_label: row, cell_no: Number(cell),
-      customer_name: slot?.customer_name || '',
-      product: slot?.product || '',
-      quantity: slot?.quantity || 0,
-      note: slot?.note || '',
-    };
-    await App.fetchJSON('/api/warehouse', { method: 'POST', body: JSON.stringify(payload) });
-  },
-
-  async openCellEditor(zone, band, row, cell) {
-    try {
-      const info = await App.fetchJSON(`/api/warehouse?zone=${zone}`);
-      const bands = info.bands || [];
-      const bandObj = bands.find(x => String(x.band_no) === String(band));
-      const slot = bandObj ? (row === 'front' ? bandObj.front[cell-1] : bandObj.back[cell-1]) : null;
-      const suggestions = await App.fetchJSON('/api/warehouse/slots?zone=' + zone + '&band_no=' + band + '&row_label=' + row + '&cell_no=' + cell);
-      const allNames = (App.state.customers || []).map(c => c.customer_name).filter(Boolean);
-      App.openModal(`編輯格位 ${zone}-${band}-${row}-${cell}`, `
-        <div class="modal-grid">
-          <div>
-            <div class="label">客戶名稱（輸入關鍵字直接跳出完整名稱）</div>
-            <div class="autocomplete">
-              <input class="input" id="slotCustomer" value="${slot?.customer_name || ''}" oninput="App.searchSlotCustomers(this.value)">
-              <div id="slotCustomerSug" class="suggestions"></div>
-            </div>
-            <div style="height:10px"></div>
-            <div class="label">商品</div>
-            <input class="input" id="slotProduct" value="${slot?.product || ''}" placeholder="可搜尋：113">
-            <div style="height:10px"></div>
-            <div class="label">數量</div>
-            <input class="input" id="slotQty" type="number" value="${slot?.quantity || 0}">
-            <div style="height:10px"></div>
-            <div class="label">備註</div>
-            <textarea id="slotNote">${slot?.note || ''}</textarea>
-          </div>
-          <div>
-            <div class="label">已錄入下拉選項（可直接添加）</div>
-            <select id="slotPreset" onchange="App.applyPreset(this.value)">
-              <option value="">--選擇已錄入項目--</option>
-              ${(suggestions.suggestions || []).map(s => `<option value="${s.product}|${s.customer_name}|${s.quantity}">${s.product} ｜ ${s.customer_name || ''} ｜ ${s.quantity || 0}</option>`).join('')}
-            </select>
-            <div style="height:10px"></div>
-            <div class="label">搜尋商品</div>
-            <input class="input" id="slotSearch" placeholder="輸入 113 即可篩選" oninput="App.filterSlotSuggestions(this.value)">
-            <div style="height:10px"></div>
-            <div id="slotSuggestionList" class="list" style="max-height:320px;overflow:auto">
-              ${(suggestions.suggestions || []).map(s => `
-                <div class="list-item clickable" onclick="App.fillSlotFromSuggestion(${JSON.stringify(s)})">
-                  <div class="meta">
-                    <div class="title">${s.product || ''}</div>
-                    <div class="desc">${s.customer_name || ''} ｜ ${s.quantity || 0}</div>
-                  </div>
-                  <div class="small">點選添加</div>
-                </div>
-              `).join('')}
-            </div>
-          </div>
-        </div>
-        <div class="modal-actions">
-          <button class="ghost" onclick="App.clearSlot('${zone}', ${band}, '${row}', ${cell})">清空</button>
-          <button class="primary" onclick="App.saveOpenSlot('${zone}', ${band}, '${row}', ${cell})">儲存</button>
-        </div>
-      `);
-      App.state.currentCell = { zone, band, row, cell };
-    } catch (e) {
-      App.toast('開啟格位失敗', e.message, 'bad');
-    }
-  },
-
-  searchSlotCustomers(q) {
-    const box = document.getElementById('slotCustomerSug');
-    const query = (q || '').trim();
-    if (!box) return;
-    const matches = (App.state.customers || []).map(c => c.customer_name || '').filter(name => name.includes(query) || query.split('').every(ch => name.includes(ch))).slice(0, 12);
-    box.innerHTML = matches.map(name => `<div class="suggestion" onclick="document.getElementById('slotCustomer').value=${JSON.stringify(name)};document.getElementById('slotCustomerSug').style.display='none'">${name}</div>`).join('');
-    box.style.display = matches.length ? 'block' : 'none';
-  },
-
-  filterSlotSuggestions(q) {
-    const query = (q || '').trim();
-    document.querySelectorAll('#slotSuggestionList .list-item').forEach(el => {
-      el.style.display = !query || el.innerText.includes(query) ? '' : 'none';
-    });
-  },
-
-  fillSlotFromSuggestion(s) {
-    document.getElementById('slotProduct').value = s.product || '';
-    document.getElementById('slotCustomer').value = s.customer_name || '';
-    document.getElementById('slotQty').value = s.quantity || 0;
-  },
-
-  applyPreset(val) {
-    if (!val) return;
-    const [product, customer, qty] = val.split('|');
-    document.getElementById('slotProduct').value = product || '';
-    document.getElementById('slotCustomer').value = customer || '';
-    document.getElementById('slotQty').value = qty || 0;
-  },
-
-  async saveOpenSlot(zone, band, row, cell) {
-    try {
-      await App.fetchJSON('/api/warehouse', {
-        method: 'POST',
-        body: JSON.stringify({
-          zone,
-          band_no: band,
-          row_label: row,
-          cell_no: cell,
-          customer_name: document.getElementById('slotCustomer').value.trim(),
-          product: document.getElementById('slotProduct').value.trim(),
-          quantity: Number(document.getElementById('slotQty').value || 0),
-          note: document.getElementById('slotNote').value.trim()
-        })
-      });
-      App.toast('已儲存', '倉庫格位更新完成', 'good');
-      App.closeModal();
-      await App.loadWarehouse();
-    } catch (e) {
-      App.toast('儲存失敗', e.message, 'bad');
-    }
-  },
-
-  async clearSlot(zone, band, row, cell) {
-    try {
-      document.getElementById('slotCustomer').value = '';
-      document.getElementById('slotProduct').value = '';
-      document.getElementById('slotQty').value = 0;
-      document.getElementById('slotNote').value = '';
-      await App.saveOpenSlot(zone, band, row, cell);
-    } catch (e) {
-      App.toast('清空失敗', e.message, 'bad');
-    }
-  },
-
-  async loadWarehouse() {
-    if (!document.getElementById('zoneA')) return;
-    try {
-      const a = await App.fetchJSON('/api/warehouse?zone=A');
-      const b = await App.fetchJSON('/api/warehouse?zone=B');
-      App.state.warehouseA = a.bands || [];
-      App.state.warehouseB = b.bands || [];
-      App.renderWarehouse('A', App.state.warehouseA);
-      App.renderWarehouse('B', App.state.warehouseB);
-      App.showZone(App.state.activeZone || 'A');
-      App.renderUnplacedList();
-    } catch (e) {
-      console.error(e);
-    }
-  },
-
-  renderUnplacedList() {
-    const el = document.getElementById('unplacedList');
-    if (!el) return;
-    const items = (App.state.summary?.unplaced_items || []);
-    el.innerHTML = items.map(i => `
-      <div class="list-item">
-        <div class="meta">
-          <div class="title red">${i.product || ''}</div>
-          <div class="desc">${(i.locations || []).join(', ') || '未上架'} ｜ ${i.quantity || 0}</div>
-        </div>
-        <div class="small red">紅字</div>
-      </div>
-    `).join('') || '<div class="center-note">沒有未上架商品</div>';
-  },
-
-  async poll() {
-    try {
-      const s = await App.fetchJSON('/api/summary');
-      App.state.summary = s.summary || {};
-      const badge = document.getElementById('todayBadge');
-      if (badge) badge.innerText = App.state.summary.unread_notifications || 0;
-      const notes = await App.fetchJSON('/api/notifications/latest?since_id=' + App.state.lastNotifId);
-      const newItems = notes.items || [];
-      if (newItems.length) {
-        App.state.lastNotifId = newItems[newItems.length-1].id || App.state.lastNotifId;
-        newItems.forEach(n => App.toast(n.title || '通知', n.message || '', 'good'));
-      }
-      if (App.state.module === 'today') {
-        await App.loadToday();
-      }
-      if (App.state.module === 'warehouse') await App.loadWarehouse();
-      if (App.state.module === 'inventory') { await App.loadInventory(); }
-      if (App.state.module === 'customers') await App.loadCustomers();
-    } catch (e) {}
-  },
-
-  async markNotificationsRead() {
-    try {
-      await App.fetchJSON('/api/notifications/read', { method:'POST', body: JSON.stringify({}) });
-      const badge = document.getElementById('todayBadge');
-      if (badge) badge.innerText = '0';
-      await App.loadToday();
-    } catch (e) {}
-  },
-
-  async loadToday() {
-    try {
-      const data = await App.fetchJSON('/api/today_changes');
-      App.state.notifications = data.notifications || [];
-      App.state.logs = data.logs || [];
-      App.state.discrepancies = data.discrepancies || [];
-      App.state.summary = data.summary || {};
-      App.renderSummaryCards();
-      App.renderNotifications();
-      App.renderUnplacedList();
-    } catch (e) {}
-  },
-
-  async loadInventory() {
-    try {
-      const data = await App.fetchJSON('/api/inventory');
-      App.state.inventory = data.items || [];
-      App.renderInventory();
-    } catch (e) {}
-  },
-
-  initModule() {
-    if (App.state.module === 'inventory') App.renderInventory();
-    if (App.state.module === 'orders') App.renderOrders();
-    if (App.state.module === 'master_orders') App.renderMasters();
-    if (App.state.module === 'shipping_records') App.loadShippingRecords();
-    if (App.state.module === 'customers') App.loadCustomers();
-    if (['orders','master_orders','shipping'].includes(App.state.module)) App.renderCustomerChips(App.state.module);
-    if (App.state.module === 'warehouse') App.loadWarehouse();
-    if (App.state.module === 'today') App.loadToday();
-    if (App.state.module === 'settings') App.renderNotifications();
-    if (App.state.module === 'reconcile') App.renderNotifications();
-    App.renderSummaryCards();
-    App.renderNotifications();
-    App.renderUnplacedList();
-    App.applyNotificationCount();
-  },
-
-  applyNotificationCount() {
-    const badge = document.getElementById('todayBadge');
-    if (badge) badge.innerText = App.state.summary?.unread_notifications || window.APP_CONFIG.unreadCount || 0;
-  },
-
-  attachCameraButton() {
-    const module = App.state.module;
-    if (!['inventory','orders','master_orders','shipping'].includes(module)) return;
-    if (document.getElementById('floatingCameraBtn')) return;
-    const btn = document.createElement('button');
-    btn.id = 'floatingCameraBtn';
-    btn.className = 'icon-btn camera';
-    btn.innerHTML = '📷';
-    btn.title = '拍照 / 上傳';
-    btn.onclick = () => App.triggerFileByCurrentModule();
-    document.body.appendChild(btn);
-  },
-
-  triggerFileByCurrentModule() {
-    if (!App.state.module) return;
-    App.triggerCamera(App.state.module);
-  },
-
-  parseRoute() {
-    return App.state.module;
-  },
-
-
-  async searchWarehouse() {
-    const query = (document.getElementById('warehouseSearch')?.value || '').trim();
-    if (!query) {
-      App.toast('請輸入關鍵字', '', 'warn');
-      return;
-    }
-    try {
-      const a = await App.fetchJSON('/api/warehouse?zone=A');
-      const b = await App.fetchJSON('/api/warehouse?zone=B');
-      const all = [...(a.bands || []), ...(b.bands || [])];
-      let hit = null;
-      for (const band of all) {
-        for (const rowLabel of ['front','back']) {
-          const arr = rowLabel === 'front' ? band.front : band.back;
-          for (let i = 0; i < arr.length; i++) {
-            const slot = arr[i];
-            if (!slot) continue;
-            const text = `${slot.customer_name || ''} ${slot.product || ''} ${slot.slot_key || ''}`;
-            if (text.includes(query)) {
-              hit = { zone: slot.zone, band: slot.band_no, row: slot.row_label, cell: slot.cell_no };
-              break;
-            }
-          }
-          if (hit) break;
-        }
-        if (hit) break;
-      }
-      if (hit) {
-        App.showZone(hit.zone || 'A');
-        App.toast('找到格位', `${hit.zone}-${hit.band}-${hit.row}-${hit.cell}`, 'good');
-        App.openCellEditor(hit.zone, hit.band, hit.row, hit.cell);
-      } else {
-        App.toast('找不到', query, 'warn');
-      }
-    } catch (e) {
-      App.toast('搜尋失敗', e.message, 'bad');
-    }
-  },
-
-  init() {
-    if (!window.APP_CONFIG || !window.APP_CONFIG.user) return;
-    App.initModule();
-    App.attachCameraButton();
-    setInterval(() => App.poll(), 5000);
-    setTimeout(() => App.poll(), 1200);
-  }
+const state = {
+  module: null,
+  rememberLogin: true,
+  lastOcrItems: [],
+  warehouse: { cells: [], zones: null, availableItems: [], currentZone: 'A' },
+  currentCell: null,
+  currentCellItems: [],
+  currentCustomer: null,
+  customerItems: [],
+  activity: { latest: '', unread: 0, items: [], summary: {} },
+  syncTimer: null,
+  activityTimer: null
 };
 
+function $(id){ return document.getElementById(id); }
+function qs(sel){ return document.querySelector(sel); }
+function qsa(sel){ return Array.from(document.querySelectorAll(sel)); }
+
+async function requestJSON(url, options={}){
+  const res = await fetch(url, {
+    headers: {'Content-Type': 'application/json', ...(options.headers||{})},
+    ...options
+  });
+  const data = await res.json().catch(()=>({success:false,error:'回應解析失敗'}));
+  if(!res.ok || data.success === false){
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+  return data;
+}
+
+function toast(msg, kind=''){
+  let t = $('toast');
+  if(!t){
+    t = document.createElement('div');
+    t.id='toast';
+    t.className='toast';
+    document.body.appendChild(t);
+  }
+  t.textContent = msg;
+  t.className = `toast show ${kind}`;
+  clearTimeout(window.__toastTimer);
+  window.__toastTimer = setTimeout(()=>{ t.className='toast'; }, 2400);
+}
+
+function currentModule(){
+  const el = qs('.module-screen');
+  return el ? el.dataset.module : null;
+}
+
 document.addEventListener('DOMContentLoaded', () => {
-  App.init();
+  state.module = currentModule();
+  if ($('remember-label')) {
+    state.rememberLogin = localStorage.getItem('rememberLogin') !== '0';
+    $('remember-label').textContent = state.rememberLogin ? '開' : '關';
+  }
+  if ($('login-username')) initLoginPage();
+  if (document.querySelector('.home-screen')) initHomePage();
+  if (state.module === 'activity') initActivityPage();
+  if (state.module && state.module !== 'activity') initModulePage();
+  startLiveSync();
+});
+
+function initLoginPage(){
+  const u = localStorage.getItem('username') || '';
+  const p = localStorage.getItem('password') || '';
+  if ($('login-username')) $('login-username').value = u;
+  if ($('login-password')) $('login-password').value = p;
+  if (u && p) {
+    submitLogin(true);
+  }
+  const pass = $('login-password');
+  if (pass) pass.addEventListener('keypress', e => { if (e.key === 'Enter') submitLogin(); });
+}
+
+function toggleLoginSave(){
+  state.rememberLogin = !state.rememberLogin;
+  localStorage.setItem('rememberLogin', state.rememberLogin ? '1' : '0');
+  if ($('remember-label')) $('remember-label').textContent = state.rememberLogin ? '開' : '關';
+}
+
+function initHomePage(){
+  pollActivityStatus(false);
+  refreshActivityBadge();
+}
+
+function initActivityPage(){
+  loadActivityPage(true);
+}
+
+async function submitLogin(auto=false){
+  const username = ($('login-username')?.value || '').trim();
+  const password = ($('login-password')?.value || '').trim();
+  const err = $('login-error');
+  if (!username || !password) {
+    if (!auto && err) { err.textContent = '請輸入帳號與密碼'; err.classList.remove('hidden'); }
+    return;
+  }
+  try {
+    const data = await requestJSON('/api/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password })
+    });
+    localStorage.setItem('username', username);
+    localStorage.setItem('password', password);
+    if (state.rememberLogin) {
+      localStorage.setItem('username', username);
+      localStorage.setItem('password', password);
+    }
+    if (err) err.classList.add('hidden');
+    window.location.href = '/';
+  } catch (e) {
+    if (err) {
+      err.textContent = e.message || '登入失敗';
+      err.classList.remove('hidden');
+    }
+  }
+}
+
+async function logout(){
+  try { await requestJSON('/api/logout', { method:'POST', body:'{}' }); } catch(e){}
+  localStorage.removeItem('username');
+  localStorage.removeItem('password');
+  window.location.href = '/login';
+}
+
+async function changePassword(){
+  const old_password = ($('old-password')?.value || '').trim();
+  const new_password = ($('new-password')?.value || '').trim();
+  const confirm_password = ($('confirm-password')?.value || '').trim();
+  const msg = $('settings-msg');
+  try {
+    await requestJSON('/api/change_password', {
+      method: 'POST',
+      body: JSON.stringify({ old_password, new_password, confirm_password })
+    });
+    if (msg) { msg.textContent = '密碼已更新'; msg.classList.remove('hidden'); }
+    toast('密碼修改成功', 'ok');
+    $('old-password').value = $('new-password').value = $('confirm-password').value = '';
+  } catch (e) {
+    if (msg) { msg.textContent = e.message; msg.classList.remove('hidden'); }
+  }
+}
+
+function startLiveSync(){
+  clearInterval(state.syncTimer);
+  clearInterval(state.activityTimer);
+  state.syncTimer = setInterval(refreshCurrentPageData, 10000);
+  state.activityTimer = setInterval(() => pollActivityStatus(true), 6000);
+}
+
+async function refreshCurrentPageData(){
+  if (state.module === 'inventory') await loadInventory();
+  if (state.module === 'orders' || state.module === 'master_order' || state.module === 'ship') await loadCustomerBlocks();
+  if (state.module === 'shipping_query') await loadShippingRecords();
+  if (state.module === 'warehouse') await renderWarehouse();
+  if (state.module === 'customers') await renderCustomers();
+  if (state.module === 'activity') await loadActivityPage(false);
+}
+
+function refreshActivityBadge(count){
+  updateActivityBadge(count ?? state.activity.unread ?? 0);
+}
+
+function updateActivityBadge(count){
+  const badge = $('activity-badge');
+  if (!badge) return;
+  const value = Number(count || 0);
+  if (value <= 0) {
+    badge.classList.add('hidden');
+    badge.textContent = '0';
+  } else {
+    badge.classList.remove('hidden');
+    badge.textContent = value > 99 ? '99+' : String(value);
+  }
+}
+
+async function pollActivityStatus(showToastOnNew=true){
+  try {
+    const seen = localStorage.getItem('activity_seen_at') || '';
+    const lastToast = localStorage.getItem('activity_last_toast_at') || '';
+    const url = `/api/activity/feed?limit=1${seen ? `&seen_after=${encodeURIComponent(seen)}` : ''}`;
+    const data = await requestJSON(url, { method:'GET' });
+    const summary = data.summary || {};
+    state.activity.summary = summary;
+    state.activity.latest = summary.latest || '';
+    state.activity.unread = summary.unread || 0;
+    updateActivityBadge(summary.unread || 0);
+    const latest = data.items && data.items[0];
+    if (latest && latest.created_at && latest.created_at > lastToast) {
+      if (showToastOnNew) toast(`${latest.username || '系統'}｜${latest.action || '有新異動'}`, latest.kind === 'error' ? 'error' : 'ok');
+      localStorage.setItem('activity_last_toast_at', latest.created_at);
+    }
+  } catch (e) {}
+}
+
+async function loadActivityPage(markSeen=true){
+  try {
+    const data = await requestJSON('/api/activity/feed?limit=80', { method:'GET' });
+    const summary = data.summary || {};
+    state.activity.summary = summary;
+    state.activity.items = data.items || [];
+    renderActivityPage(data.items || [], summary);
+    updateActivityBadge(summary.unread || 0);
+    if (markSeen && summary.latest) {
+      localStorage.setItem('activity_seen_at', summary.latest);
+      localStorage.setItem('activity_last_toast_at', summary.latest);
+      updateActivityBadge(0);
+    }
+  } catch (e) {
+    const box = $('activity-feed');
+    if (box) box.innerHTML = `<div class="alert">${escapeHTML(e.message || '讀取失敗')}</div>`;
+  }
+}
+
+function renderActivityPage(items, summary){
+  const newEl = $('activity-stat-new');
+  const shipEl = $('activity-stat-shipping');
+  const unplacedEl = $('activity-stat-unplaced');
+  const errEl = $('activity-stat-errors');
+  if (newEl) newEl.textContent = summary.today_new ?? 0;
+  if (shipEl) shipEl.textContent = summary.today_shipping_qty ?? 0;
+  if (unplacedEl) unplacedEl.textContent = summary.unplaced_qty ?? 0;
+  if (errEl) errEl.textContent = summary.today_errors ?? 0;
+  const feed = $('activity-feed');
+  if (!feed) return;
+  if (!items.length) {
+    feed.innerHTML = '<div class="search-card">今天暫時沒有異動</div>';
+    return;
+  }
+  feed.innerHTML = '';
+  items.forEach(item => {
+    const div = document.createElement('div');
+    div.className = `activity-row ${item.kind === 'error' ? 'activity-error' : ''}`;
+    div.innerHTML = `
+      <div class="activity-left">
+        <div class="activity-user">${escapeHTML(item.username || '系統')}</div>
+        <div class="activity-time">${escapeHTML(item.created_at || '')}</div>
+      </div>
+      <div class="activity-body">
+        <div class="activity-action">${escapeHTML(item.action || '')}</div>
+      </div>`;
+    feed.appendChild(div);
+  });
+}
+
+function initModulePage(){
+  const module = state.module;
+  setupUploadButtons();
+  const album = $('album-input');
+  const camera = $('camera-input');
+  if (album) album.addEventListener('change', e => handleFiles(e.target.files));
+  if (camera) camera.addEventListener('change', e => handleFiles(e.target.files));
+
+  if (module === 'inventory') loadInventory();
+  if (module === 'orders' || module === 'master_order' || module === 'ship') loadCustomerBlocks();
+  if (module === 'shipping_query') loadShippingRecords();
+  if (module === 'warehouse') renderWarehouse();
+  if (module === 'customers') renderCustomers();
+}
+
+function setupUploadButtons(){
+  // nothing else; native picker behavior via hidden input
+}
+
+function openAlbumPicker(){ $('album-input')?.click(); }
+function openCameraPicker(){ $('camera-input')?.click(); }
+function resetModuleForm(){
+  if ($('ocr-text')) $('ocr-text').value = '';
+  if ($('customer-name')) $('customer-name').value = '';
+  if ($('location-input')) $('location-input').value = '';
+  if ($('ocr-confidence-pill')) $('ocr-confidence-pill').textContent = '信心值：0%';
+  if ($('ocr-warning-pill')) $('ocr-warning-pill').textContent = '尚未辨識';
+  if ($('module-result')) { $('module-result').classList.add('hidden'); $('module-result').innerHTML = ''; }
+}
+
+async function handleFiles(fileList){
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+  const file = files[0];
+  const form = new FormData();
+  form.append('file', file);
+  try {
+    const res = await fetch('/api/upload_ocr', { method:'POST', body: form });
+    const data = await res.json();
+    if (!res.ok || data.success === false) throw new Error(data.error || 'OCR失敗');
+    if ($('ocr-text')) $('ocr-text').value = data.text || '';
+    if ($('ocr-confidence-pill')) $('ocr-confidence-pill').textContent = `信心值：${data.confidence || 0}%`;
+    if ($('ocr-warning-pill')) $('ocr-warning-pill').textContent = data.warning || '辨識完成';
+    state.lastOcrItems = data.items || [];
+    if (data.warning) toast(data.warning, 'warn');
+    else toast('OCR辨識完成', 'ok');
+  } catch (e) {
+    if ($('ocr-warning-pill')) $('ocr-warning-pill').textContent = e.message;
+    toast(e.message || 'OCR辨識失敗', 'error');
+  }
+}
+
+function parseTextareaItems(){
+  const text = ($('ocr-text')?.value || '').trim();
+  if (!text) return [];
+  const lines = text.split(/\n+/).map(s => s.trim()).filter(Boolean);
+  return lines.map(line => {
+    const parts = line.split(/[:=]/);
+    let product_text = line, qty = 1, product_code = '';
+    if (parts.length >= 2) {
+      product_text = parts[0].trim();
+      qty = parseInt(parts[1], 10) || 1;
+    } else {
+      const m = line.match(/^(.+?)[x\*](\d+)$/i);
+      if (m) { product_text = m[1].trim(); qty = parseInt(m[2], 10) || 1; }
+    }
+    product_code = product_text.split('=')[0];
+    return { product_text, product_code, qty };
+  });
+}
+
+async function confirmSubmit(){
+  const module = state.module;
+  const customer_name = ($('customer-name')?.value || '').trim();
+  const location = ($('location-input')?.value || '').trim();
+  const ocr_text = ($('ocr-text')?.value || '').trim();
+  const items = state.lastOcrItems && state.lastOcrItems.length ? state.lastOcrItems : parseTextareaItems();
+  try {
+    let endpoint = '/api/inventory';
+    if (module === 'orders') endpoint = '/api/orders';
+    if (module === 'master_order') endpoint = '/api/master_orders';
+    if (module === 'ship') endpoint = '/api/ship';
+    const payload = { customer_name, location, ocr_text, items };
+    const data = await requestJSON(endpoint, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    renderSubmitResult(module, data, customer_name);
+    if (module === 'inventory') await loadInventory();
+    if (module === 'orders' || module === 'master_order' || module === 'ship') await loadCustomerBlocks();
+    if (module === 'warehouse') await renderWarehouse();
+    toast('送出完成', 'ok');
+  } catch (e) {
+    showResult(`錯誤：${e.message}`, true);
+  }
+}
+
+function renderSubmitResult(module, data, customerName=''){
+  const box = $('module-result');
+  if (!box) return;
+  box.classList.remove('hidden');
+  let html = '';
+  if (module === 'ship') {
+    const breakdown = data.breakdown || [];
+    html += `<div class="section-title">出貨結果</div>`;
+    html += `<div class="muted">客戶：${escapeHTML(customerName)}</div>`;
+    breakdown.forEach(b => {
+      html += `<div class="chip-item"><strong>${escapeHTML(b.product_text)}</strong> × ${b.qty} ｜ 總單 ${b.master_deduct} ｜ 訂單 ${b.order_deduct} ｜ 庫存 ${b.inventory_deduct}</div>`;
+    });
+  } else if (module === 'orders') {
+    html += `<div class="section-title">訂單已建立</div><div class="muted">客戶：${escapeHTML(customerName)}｜狀態：pending</div>`;
+  } else if (module === 'master_order') {
+    html += `<div class="section-title">總單已更新</div><div class="muted">客戶：${escapeHTML(customerName)}</div>`;
+  } else if (module === 'inventory') {
+    html += `<div class="section-title">庫存已更新</div>`;
+  } else {
+    html += `<div class="section-title">已儲存</div>`;
+  }
+  box.innerHTML = html;
+}
+
+function showResult(msg, isError=false){
+  const box = $('module-result');
+  if (!box) return;
+  box.classList.remove('hidden');
+  box.innerHTML = `<div class="${isError ? 'warning-red' : ''}">${msg}</div>`;
+}
+
+async function loadInventory(){
+  try {
+    const data = await requestJSON('/api/inventory', { method:'GET' });
+    const el = $('inventory-summary');
+    if (!el) return;
+    el.innerHTML = '';
+    (data.items || []).forEach(item => {
+      const card = document.createElement('div');
+      card.className = `card ${item.needs_red ? 'red' : ''}`;
+      card.innerHTML = `
+        <div class="title ${item.needs_red ? 'warning-red' : ''}">${escapeHTML(item.product_text || '')}</div>
+        <div class="sub">總數量：${item.qty || 0}</div>
+        <div class="sub">已放倉庫：${item.placed_qty || 0}</div>
+        <div class="sub">未放倉庫：${item.unplaced_qty || 0}</div>
+        <div class="sub">客戶：${escapeHTML(item.customer_name || '—')}</div>
+        <div class="sub">位置：${escapeHTML(item.location || '—')}</div>
+      `;
+      el.appendChild(card);
+    });
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+async function loadCustomerBlocks(){
+  try {
+    const data = await requestJSON('/api/customers', { method:'GET' });
+    const groups = { '北區': $('region-north'), '中區': $('region-center'), '南區': $('region-south') };
+    if ($('customers-north')) groups['北區'] = $('customers-north');
+    if ($('customers-center')) groups['中區'] = $('customers-center');
+    if ($('customers-south')) groups['南區'] = $('customers-south');
+    Object.values(groups).forEach(el => { if (el) el.innerHTML=''; });
+    const q = ($('customer-search')?.value || '').trim().toLowerCase();
+    (data.items || []).filter(c => !q || (c.name || '').toLowerCase().includes(q)).forEach(c => {
+      const chip = document.createElement('div');
+      chip.className = 'chip';
+      chip.draggable = true;
+      chip.dataset.customer = c.name;
+      chip.innerHTML = `<span>${escapeHTML(c.name)}</span>`;
+      chip.addEventListener('dragstart', ev => {
+        ev.dataTransfer.setData('text/plain', JSON.stringify({name:c.name, region:c.region || '北區'}));
+      });
+      chip.addEventListener('click', () => openCustomerModal(c.name));
+      const target = groups[c.region || '北區'] || groups['北區'];
+      target?.appendChild(chip);
+    });
+    setupCustomerDropZones();
+    if (state.module === 'customers') {
+      $('cust-region').value = '北區';
+      if (! $('cust-name').value) {
+        $('cust-name').placeholder = '點選客戶可自動帶入';
+      }
+    }
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function setupCustomerDropZones(){
+  qsa('.category-box').forEach(box => {
+    box.ondragover = e => { e.preventDefault(); box.classList.add('drag-over'); };
+    box.ondragleave = () => box.classList.remove('drag-over');
+    box.ondrop = async e => {
+      e.preventDefault(); box.classList.remove('drag-over');
+      const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+      if (!data || !data.name) return;
+      try {
+        await requestJSON('/api/customers', { method:'POST', body: JSON.stringify({ name:data.name, region: box.dataset.region }) });
+        toast('客戶分類已更新', 'ok');
+        loadCustomerBlocks();
+      } catch(err){ toast(err.message, 'error'); }
+    };
+  });
+}
+
+async function openCustomerModal(name){
+  try {
+    state.currentCustomer = name;
+    const detail = await requestJSON(`/api/customers/${encodeURIComponent(name)}`, { method:'GET' });
+    const items = await requestJSON(`/api/customer-items?name=${encodeURIComponent(name)}`, { method:'GET' });
+    $('customer-modal').classList.remove('hidden');
+    const body = $('customer-modal-body');
+    body.innerHTML = `
+      <div class="card-list">
+        <div class="card">
+          <div class="title">${escapeHTML(name)}</div>
+          <div class="sub">電話：${escapeHTML(detail.item?.phone || '')}</div>
+          <div class="sub">地址：${escapeHTML(detail.item?.address || '')}</div>
+          <div class="sub">特殊要求：${escapeHTML(detail.item?.notes || '')}</div>
+          <div class="sub">區域：${escapeHTML(detail.item?.region || '')}</div>
+        </div>
+        <div class="card">
+          <div class="title">商品</div>
+          <div id="customer-modal-items" class="chip-list"></div>
+        </div>
+      </div>`;
+    const list = $('customer-modal-items');
+    (items.items || []).forEach(it => {
+      const ch = document.createElement('div');
+      ch.className='chip-item';
+      ch.textContent = `${it.source}｜${it.product_text || ''} × ${it.qty || 0}`;
+      list.appendChild(ch);
+    });
+    $('cust-name').value = detail.item?.name || name;
+    $('cust-phone').value = detail.item?.phone || '';
+    $('cust-address').value = detail.item?.address || '';
+    $('cust-notes').value = detail.item?.notes || '';
+    $('cust-region').value = detail.item?.region || '北區';
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+function closeCustomerModal(){ $('customer-modal')?.classList.add('hidden'); }
+
+async function saveCustomer(){
+  try {
+    const payload = {
+      name: ($('cust-name')?.value || '').trim(),
+      phone: ($('cust-phone')?.value || '').trim(),
+      address: ($('cust-address')?.value || '').trim(),
+      notes: ($('cust-notes')?.value || '').trim(),
+      region: $('cust-region')?.value || '北區'
+    };
+    await requestJSON('/api/customers', { method:'POST', body: JSON.stringify(payload) });
+    toast('客戶已儲存', 'ok');
+    await loadCustomerBlocks();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function loadShippingRecords(){
+  try {
+    const range = $('ship-range')?.value || '7';
+    let start = $('ship-start')?.value;
+    let end = $('ship-end')?.value;
+    if (range !== 'custom') {
+      const days = parseInt(range, 10) || 7;
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setDate(endDate.getDate() - days + 1);
+      end = endDate.toISOString().slice(0,10);
+      start = startDate.toISOString().slice(0,10);
+      if ($('ship-start')) $('ship-start').value = start;
+      if ($('ship-end')) $('ship-end').value = end;
+    }
+    const qs = new URLSearchParams();
+    if (start) qs.set('start_date', start);
+    if (end) qs.set('end_date', end);
+    const data = await requestJSON(`/api/shipping_records?${qs.toString()}`, { method:'GET' });
+    const el = $('shipping-results');
+    if (!el) return;
+    if (!data.records || !data.records.length) {
+      el.innerHTML = '<div class="panel">沒有資料</div>';
+      return;
+    }
+    let html = '<table><thead><tr><th>客戶</th><th>商品</th><th>數量</th><th>操作人員</th><th>出貨時間</th></tr></thead><tbody>';
+    data.records.forEach(r => {
+      html += `<tr><td>${escapeHTML(r.customer_name || '')}</td><td>${escapeHTML(r.product_text || '')}</td><td>${r.qty || 0}</td><td>${escapeHTML(r.operator || '')}</td><td>${escapeHTML(r.shipped_at || '')}</td></tr>`;
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+  } catch (e) {
+    const el = $('shipping-results');
+    if (el) el.innerHTML = `<div class="panel warning-red">${e.message}</div>`;
+  }
+}
+
+async function renderWarehouse(){
+  try {
+    const [data, avail] = await Promise.all([
+      requestJSON('/api/warehouse', { method:'GET' }),
+      requestJSON('/api/warehouse/available-items', { method:'GET' })
+    ]);
+    state.warehouse.cells = data.cells || [];
+    state.warehouse.zones = data.zones || {};
+    state.warehouse.availableItems = avail.items || [];
+    renderWarehouseZoneFrame(state.warehouse.currentZone || 'A');
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function switchWarehouseZone(zone){
+  state.warehouse.currentZone = zone;
+  qsa('.zone-switch').forEach(btn => btn.classList.toggle('active', btn.dataset.zone === zone));
+  renderWarehouse();
+}
+
+function buildCellKey(zone, column_index, slot_type, slot_number){
+  return [zone, column_index, slot_type, slot_number];
+}
+
+function getCellItems(zone, column_index, slot_type, slot_number){
+  const cell = state.warehouse.cells.find(c => c.zone === zone && parseInt(c.column_index) === parseInt(column_index) && c.slot_type === slot_type && parseInt(c.slot_number) === parseInt(slot_number));
+  if (!cell) return [];
+  try { return JSON.parse(cell.items_json || '[]'); } catch(e){ return []; }
+}
+
+function renderWarehouseZoneFrame(zone){
+  const frame = $('warehouse-zone-frame');
+  if (!frame) return;
+  frame.innerHTML = '';
+  for (let band = 1; band <= 6; band++) {
+    const bandCard = document.createElement('div');
+    bandCard.className = 'band-card glass';
+    bandCard.innerHTML = `<div class="band-number">${band}</div>`;
+    const rowsWrap = document.createElement('div');
+    rowsWrap.className = 'band-rows';
+    ['front', 'back'].forEach(side => {
+      const row = document.createElement('div');
+      row.className = 'band-row';
+      const sideLabel = document.createElement('div');
+      sideLabel.className = 'band-side';
+      sideLabel.textContent = side === 'front' ? '前' : '後';
+      row.appendChild(sideLabel);
+      const slots = document.createElement('div');
+      slots.className = 'band-slot-grid';
+      for (let n = 1; n <= 10; n++) {
+        const slot = document.createElement('div');
+        slot.className = 'slot';
+        slot.dataset.zone = zone;
+        slot.dataset.column = band;
+        slot.dataset.side = side;
+        slot.dataset.num = n;
+        const items = getCellItems(zone, band, side, n);
+        slot.innerHTML = `<div class="slot-title">${side === 'front' ? '前' : '後'} ${n}</div><div class="slot-count">${items.length ? `${items.length} 筆` : '空'}</div>`;
+        if (items.length) {
+          const first = items[0];
+          slot.innerHTML += `<div class="slot-chip" draggable="true">${escapeHTML(first.product_text || first.product || '')} × ${first.qty || 0}</div>`;
+          slot.classList.add('filled');
+        }
+        slot.addEventListener('click', () => openWarehouseModal(zone, band, side, n));
+        slot.addEventListener('dragover', ev => { ev.preventDefault(); slot.classList.add('drag-over'); });
+        slot.addEventListener('dragleave', () => slot.classList.remove('drag-over'));
+        slot.addEventListener('drop', async ev => {
+          ev.preventDefault(); slot.classList.remove('drag-over');
+          const raw = ev.dataTransfer.getData('text/plain');
+          if (!raw) return;
+          const parsed = JSON.parse(raw);
+          if (parsed.kind === 'warehouse-item') {
+            await moveWarehouseItem(parsed.fromKey, buildCellKey(zone, band, side, n), parsed.product_text, parsed.qty);
+          }
+        });
+        slots.appendChild(slot);
+      }
+      row.appendChild(slots);
+      rowsWrap.appendChild(row);
+    });
+    bandCard.appendChild(rowsWrap);
+    frame.appendChild(bandCard);
+  }
+}
+
+async function openWarehouseModal(zone, column, side, num){
+  state.currentCell = { zone, column, slot_type: side, slot_number: num };
+  state.currentCellItems = getCellItems(zone, column, side, num);
+  $('warehouse-modal').classList.remove('hidden');
+  $('warehouse-modal-meta').textContent = `${zone} 區 / 第 ${column} 欄 / ${side === 'front' ? '前' : '後'} / ${num}`;
+  $('warehouse-note').value = (state.warehouse.cells.find(c => c.zone===zone && parseInt(c.column_index)===parseInt(column) && c.slot_type===side && parseInt(c.slot_number)===parseInt(num)) || {}).note || '';
+  renderWarehouseCellItems();
+  refreshWarehouseSelect();
+  const search = $('warehouse-item-search');
+  if (search) search.oninput = refreshWarehouseSelect;
+}
+
+function closeWarehouseModal(){ $('warehouse-modal')?.classList.add('hidden'); }
+
+function refreshWarehouseSelect(){
+  const sel = $('warehouse-item-select');
+  if (!sel) return;
+  const q = ($('warehouse-item-search')?.value || '').trim().toLowerCase();
+  sel.innerHTML = '';
+  state.warehouse.availableItems.filter(it => !q || `${it.product_text} ${it.customer_name || ''}`.toLowerCase().includes(q)).forEach(it => {
+    const opt = document.createElement('option');
+    opt.value = JSON.stringify(it);
+    opt.textContent = `${it.product_text}｜剩餘 ${it.unplaced_qty}`;
+    sel.appendChild(opt);
+  });
+  if (!sel.options.length) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = '沒有可加入的商品';
+    sel.appendChild(opt);
+  }
+}
+
+function renderWarehouseCellItems(){
+  const list = $('warehouse-cell-items');
+  if (!list) return;
+  list.innerHTML = '';
+  state.currentCellItems.forEach((it, idx) => {
+    const chip = document.createElement('div');
+    chip.className = 'chip-item';
+    chip.draggable = true;
+    chip.dataset.idx = idx;
+    chip.innerHTML = `<span>${escapeHTML(it.product_text || '')} × ${it.qty || 0}${it.customer_name ? ` ｜ ${escapeHTML(it.customer_name)}` : ''}</span>
+      <button class="remove" data-idx="${idx}">刪除</button>`;
+    chip.addEventListener('dragstart', ev => {
+      ev.dataTransfer.setData('text/plain', JSON.stringify({
+        kind: 'warehouse-item',
+        fromKey: buildCellKey(state.currentCell.zone, state.currentCell.column, state.currentCell.slot_type, state.currentCell.slot_number),
+        product_text: it.product_text || '',
+        qty: it.qty || 1
+      }));
+    });
+    chip.querySelector('.remove').addEventListener('click', () => {
+      state.currentCellItems.splice(idx, 1);
+      renderWarehouseCellItems();
+    });
+    list.appendChild(chip);
+  });
+}
+
+function addSelectedItemToCell(){
+  const sel = $('warehouse-item-select');
+  if (!sel || !sel.value) return;
+  const item = JSON.parse(sel.value);
+  const qty = Math.max(1, parseInt(($('warehouse-add-qty')?.value || '1'), 10) || 1);
+  state.currentCellItems.push({
+    product_text: item.product_text,
+    product_code: item.product_code || '',
+    qty,
+    customer_name: item.customer_name || '',
+    source: 'inventory'
+  });
+  renderWarehouseCellItems();
+}
+
+async function saveWarehouseCell(){
+  if (!state.currentCell) return;
+  try {
+    const note = $('warehouse-note')?.value || '';
+    await requestJSON('/api/warehouse/cell', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...state.currentCell,
+        items: state.currentCellItems,
+        note
+      })
+    });
+    toast('格位已儲存', 'ok');
+    closeWarehouseModal();
+    await renderWarehouse();
+    await loadInventory();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function moveWarehouseItem(fromKey, toKey, product_text, qty){
+  try {
+    await requestJSON('/api/warehouse/move', {
+      method: 'POST',
+      body: JSON.stringify({ from_key: fromKey, to_key: toKey, product_text, qty })
+    });
+    toast('已拖曳移動', 'ok');
+    await renderWarehouse();
+    await loadInventory();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function searchWarehouse(){
+  const q = ($('warehouse-search')?.value || '').trim();
+  if (!q) {
+    await renderWarehouse();
+    return;
+  }
+  try {
+    const data = await requestJSON(`/api/warehouse/search?q=${encodeURIComponent(q)}`, { method:'GET' });
+    const box = $('warehouse-search-results');
+    if (!box) return;
+    box.classList.remove('hidden');
+    if (!data.items || !data.items.length) {
+      box.innerHTML = '<div class="search-card">沒有找到資料</div>';
+      return;
+    }
+    box.innerHTML = '';
+    data.items.forEach(r => {
+      const cell = r.cell;
+      const item = r.item;
+      const div = document.createElement('div');
+      div.className = 'search-card';
+      div.innerHTML = `<strong>${escapeHTML(cell.zone)}區 ${cell.column_index} / ${cell.slot_type} / ${cell.slot_number}</strong><br>${escapeHTML(item.product_text || '')} × ${item.qty || 0}`;
+      box.appendChild(div);
+    });
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function reverseLookup(){
+  const q = ($('ocr-text')?.value || $('customer-name')?.value || '').trim();
+  if (!q) return;
+  if (state.module === 'warehouse') {
+    $('warehouse-search').value = q.split(/\s+/)[0];
+    searchWarehouse();
+  } else {
+    toast('已幫你抓取查詢條件', 'ok');
+  }
+}
+
+async function renderCustomers(){
+  if (state.module !== 'customers') return;
+  await loadCustomerBlocks();
+}
+
+function escapeHTML(str){
+  return String(str ?? '').replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
+}
+
+// expose globals
+window.openAlbumPicker = openAlbumPicker;
+window.openCameraPicker = openCameraPicker;
+window.resetModuleForm = resetModuleForm;
+window.confirmSubmit = confirmSubmit;
+window.reverseLookup = reverseLookup;
+window.logout = logout;
+window.submitLogin = submitLogin;
+window.toggleLoginSave = toggleLoginSave;
+window.changePassword = changePassword;
+window.openCustomerModal = openCustomerModal;
+window.closeCustomerModal = closeCustomerModal;
+window.saveCustomer = saveCustomer;
+window.loadShippingRecords = loadShippingRecords;
+window.searchWarehouse = searchWarehouse;
+window.closeWarehouseModal = closeWarehouseModal;
+window.addSelectedItemToCell = addSelectedItemToCell;
+window.saveWarehouseCell = saveWarehouseCell;
+window.renderWarehouse = renderWarehouse;
+window.renderCustomers = renderCustomers;
+
+
+function registerServiceWorker(){
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/service-worker.js').catch(() => {});
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
     });
   }
-});
+}
+registerServiceWorker();
+
+
+// --- final overrides: robust JSON, no duplicate block, cleaner UI ---
+async function requestJSON(url, options={}){
+  const res = await fetch(url, {
+    headers: {'Content-Type': 'application/json', ...(options.headers||{})},
+    ...options,
+  });
+  const text = await res.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch (e) {
+    throw new Error((text || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120) || '回應不是 JSON');
+  }
+  if (!res.ok || data.success === false) {
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+  return data;
+}
+
+function safeParseResponseText(text){
+  try { return JSON.parse(text); } catch(e) { return { success:false, error: '伺服器回傳格式錯誤' }; }
+}
+
+async function handleFiles(fileList){
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+  const file = files[0];
+  const form = new FormData();
+  form.append('file', file);
+  try {
+    const res = await fetch('/api/upload_ocr', { method:'POST', body: form });
+    const text = await res.text();
+    const data = safeParseResponseText(text);
+    if (!res.ok || data.success === false) throw new Error(data.error || 'OCR失敗');
+    if ($('ocr-text')) $('ocr-text').value = data.text || '';
+    const conf = Number(data.confidence || 0);
+    if ($('ocr-confidence-pill')) $('ocr-confidence-pill').textContent = `信心值：${conf}%`;
+    const warn = data.warning || (conf < 80 ? '辨識信心偏低，請確認內容' : '辨識完成');
+    const warning = $('ocr-warning-inline');
+    if (warning){ warning.textContent = warn; warning.classList.remove('hidden'); }
+    state.lastOcrItems = data.items || [];
+    if (warn) toast(warn, warn.includes('偏低') ? 'warn' : 'ok');
+  } catch (e) {
+    const warning = $('ocr-warning-inline');
+    if (warning){ warning.textContent = e.message || 'OCR辨識失敗'; warning.classList.remove('hidden'); }
+    toast(e.message || 'OCR辨識失敗', 'error');
+  } finally {
+    if ($('album-input')) $('album-input').value = '';
+    if ($('camera-input')) $('camera-input').value = '';
+  }
+}
+
+function resetModuleForm(){
+  if ($('ocr-text')) $('ocr-text').value = '';
+  if ($('customer-name')) $('customer-name').value = '';
+  if ($('location-input')) $('location-input').value = '';
+  if ($('ocr-confidence-pill')) $('ocr-confidence-pill').textContent = '信心值：0%';
+  const warning = $('ocr-warning-inline');
+  if (warning){ warning.textContent = '尚未辨識'; warning.classList.remove('hidden'); }
+  if ($('module-result')) { $('module-result').classList.add('hidden'); $('module-result').innerHTML = ''; }
+  state.lastOcrItems = [];
+}
+
+function loadInventory(){
+  requestJSON('/api/inventory', { method:'GET' }).then(data => {
+    const el = $('inventory-summary');
+    if (!el) return;
+    el.innerHTML = '';
+    (data.items || []).forEach(item => {
+      const card = document.createElement('div');
+      card.className = `card ${item.needs_red ? 'red' : ''}`;
+      card.innerHTML = `
+        <div class="title ${item.needs_red ? 'warning-red' : ''}">${escapeHTML(item.product_text || '')}</div>
+        <div class="sub">總數量：${item.qty || 0}</div>
+        <div class="sub">已放倉庫：${item.placed_qty || 0}</div>
+        <div class="sub">未放倉庫：${item.unplaced_qty || 0}</div>
+        <div class="sub">位置：${escapeHTML(item.location || '—')}</div>
+      `;
+      el.appendChild(card);
+    });
+  }).catch(()=>{});
+}
+
+function renderSubmitResult(module, data, customerName=''){
+  const box = $('module-result');
+  if (!box) return;
+  box.classList.remove('hidden');
+  let html = '';
+  if (module === 'ship') {
+    const breakdown = data.breakdown || [];
+    html += `<div class="section-title">出貨結果</div>`;
+    html += `<div class="muted">客戶：${escapeHTML(customerName)}</div>`;
+    breakdown.forEach(b => {
+      html += `<div class="chip-item"><strong>${escapeHTML(b.product_text)}</strong> × ${b.qty} ｜ 總單 ${b.master_deduct} ｜ 訂單 ${b.order_deduct} ｜ 庫存 ${b.inventory_deduct}</div>`;
+    });
+  } else if (module === 'orders') {
+    html += `<div class="section-title">訂單已建立</div><div class="muted">客戶：${escapeHTML(customerName)}｜狀態：pending</div>`;
+  } else if (module === 'master_order') {
+    html += `<div class="section-title">總單已更新</div>`;
+  } else if (module === 'inventory') {
+    html += `<div class="section-title">庫存已更新</div>`;
+  } else {
+    html += `<div class="section-title">已儲存</div>`;
+  }
+  box.innerHTML = html;
+}
+
+function renderActivityPage(items, summary){
+  const newEl = $('activity-stat-new');
+  const shipEl = $('activity-stat-shipping');
+  const unplacedEl = $('activity-stat-unplaced');
+  if (newEl) newEl.textContent = summary.today_new ?? 0;
+  if (shipEl) shipEl.textContent = summary.today_shipping_qty ?? 0;
+  if (unplacedEl) unplacedEl.textContent = summary.unplaced_qty ?? 0;
+  const feed = $('activity-feed');
+  if (!feed) return;
+  if (!items.length) {
+    feed.innerHTML = '<div class="search-card">今天暫時沒有異動</div>';
+    return;
+  }
+  feed.innerHTML = '';
+  items.forEach(item => {
+    const div = document.createElement('div');
+    div.className = `activity-row ${item.kind === 'error' ? 'activity-error' : ''}`;
+    div.dataset.itemId = item.id || '';
+    div.dataset.kind = item.kind || 'log';
+    div.innerHTML = `
+      <div class="activity-left">
+        <div class="activity-user">${escapeHTML(item.username || '系統')}</div>
+        <div class="activity-time">${escapeHTML(item.created_at || '')}</div>
+      </div>
+      <div class="activity-body">
+        <div class="activity-action">${escapeHTML(item.action || '')}</div>
+      </div>
+      <button class="activity-delete-btn" type="button">刪除</button>`;
+    feed.appendChild(div);
+  });
+  attachActivitySwipeHandlers();
+}
+
+function attachActivitySwipeHandlers(){
+  qsa('.activity-row').forEach(row => {
+    if (row.dataset.bound === '1') return;
+    row.dataset.bound = '1';
+    const btn = row.querySelector('.activity-delete-btn');
+    let startX = 0;
+    let dx = 0;
+    const reset = () => {
+      row.classList.remove('revealed');
+      row.style.transform = '';
+      dx = 0;
+    };
+    const remove = async () => {
+      try {
+        await requestJSON('/api/activity/item', {
+          method: 'DELETE',
+          body: JSON.stringify({ kind: row.dataset.kind, id: row.dataset.itemId })
+        });
+        toast('已刪除', 'ok');
+        await loadActivityPage(false);
+      } catch (e) {
+        toast(e.message || '刪除失敗', 'error');
+      }
+    };
+    row.addEventListener('touchstart', e => {
+      startX = e.touches[0].clientX;
+      dx = 0;
+      row.style.transition = 'none';
+    }, {passive:true});
+    row.addEventListener('touchmove', e => {
+      dx = e.touches[0].clientX - startX;
+      if (dx < 0) {
+        row.style.transform = `translateX(${dx}px)`;
+      }
+    }, {passive:true});
+    row.addEventListener('touchend', () => {
+      row.style.transition = '';
+      if (dx < -90) {
+        row.classList.add('revealed');
+        setTimeout(remove, 120);
+      } else {
+        reset();
+      }
+    });
+    row.addEventListener('click', (e) => {
+      if (e.target === btn) remove();
+    });
+    btn?.addEventListener('click', remove);
+  });
+}
+
+async function loadActivityPage(markSeen=true){
+  try {
+    const data = await requestJSON('/api/activity/feed?limit=80', { method:'GET' });
+    const summary = data.summary || {};
+    state.activity.summary = summary;
+    state.activity.items = data.items || [];
+    renderActivityPage(data.items || [], summary);
+    updateActivityBadge(summary.unread || 0);
+    if (markSeen && summary.latest) {
+      localStorage.setItem('activity_seen_at', summary.latest);
+      localStorage.setItem('activity_last_toast_at', summary.latest);
+      updateActivityBadge(0);
+    }
+  } catch (e) {
+    const box = $('activity-feed');
+    if (box) box.innerHTML = `<div class="alert">${escapeHTML(e.message || '讀取失敗')}</div>`;
+  }
+}
+
+async function pollActivityStatus(showToastOnNew=true){
+  try {
+    const seen = localStorage.getItem('activity_seen_at') || '';
+    const lastToast = localStorage.getItem('activity_last_toast_at') || '';
+    const url = `/api/activity/feed?limit=1${seen ? `&seen_after=${encodeURIComponent(seen)}` : ''}`;
+    const data = await requestJSON(url, { method:'GET' });
+    const summary = data.summary || {};
+    state.activity.summary = summary;
+    state.activity.latest = summary.latest || '';
+    state.activity.unread = summary.unread || 0;
+    updateActivityBadge(summary.unread || 0);
+    const latest = data.items && data.items[0];
+    if (latest && latest.created_at && latest.created_at > lastToast) {
+      if (showToastOnNew) toast(`${latest.username || '系統'}｜${latest.action || '有新異動'}`, latest.kind === 'error' ? 'error' : 'ok');
+      localStorage.setItem('activity_last_toast_at', latest.created_at);
+    }
+  } catch (e) {}
+}
