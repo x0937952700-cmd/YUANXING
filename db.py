@@ -47,6 +47,47 @@ def row_id(row):
         return None
     return row[0] if USE_POSTGRES else row["id"]
 
+def _table_columns(cur, table):
+    if USE_POSTGRES:
+        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = %s", (table,))
+        return {row[0] for row in cur.fetchall()}
+    cur.execute(f"PRAGMA table_info({table})")
+    return {row[1] for row in cur.fetchall()}
+
+
+def _ensure_column(cur, table, column, coltype):
+    try:
+        cols = _table_columns(cur, table)
+        if column in cols:
+            return
+        if USE_POSTGRES:
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {coltype}")
+        else:
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+    except Exception as e:
+        # Keep deployment resilient on legacy schemas
+        log_error(f"migrate_{table}_{column}", str(e))
+
+
+def _migrate_schema(cur):
+    # Bring legacy databases up to the current schema without data loss.
+    needed = {
+        "users": [("updated_at", "TEXT")],
+        "customer_profiles": [("phone", "TEXT"), ("address", "TEXT"), ("notes", "TEXT"), ("region", "TEXT"), ("created_at", "TEXT"), ("updated_at", "TEXT")],
+        "inventory": [("product_code", "TEXT"), ("customer_name", "TEXT"), ("operator", "TEXT"), ("source_text", "TEXT"), ("created_at", "TEXT"), ("updated_at", "TEXT")],
+        "orders": [("product_code", "TEXT"), ("updated_at", "TEXT")],
+        "master_orders": [("product_code", "TEXT"), ("updated_at", "TEXT")],
+        "shipping_records": [("product_code", "TEXT"), ("note", "TEXT")],
+        "corrections": [("updated_at", "TEXT")],
+        "image_hashes": [("created_at", "TEXT")],
+        "logs": [("created_at", "TEXT")],
+        "errors": [("created_at", "TEXT")],
+        "warehouse_cells": [("zone", "TEXT"), ("column_index", "INTEGER"), ("slot_type", "TEXT"), ("slot_number", "INTEGER"), ("items_json", "TEXT"), ("note", "TEXT"), ("updated_at", "TEXT")],
+    }
+    for table, columns in needed.items():
+        for column, coltype in columns:
+            _ensure_column(cur, table, column, coltype)
+
 def fetchone_dict(cur):
     row = cur.fetchone()
     if row is None:
@@ -172,6 +213,7 @@ def init_db():
     ]
     for t in tables:
         cur.execute(t)
+    _migrate_schema(cur)
     for zone in ("A", "B"):
         for col in range(1, 7):
             for slot_type in ("front", "back"):
