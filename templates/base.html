@@ -1,16 +1,14 @@
-
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{{ title or '沅興木業' }}</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
   <script defer src="{{ url_for('static', filename='app.js') }}"></script>
 </head>
-<body>
-  <div class="page-shell">
-    {% block body %}{% endblock %}
-  </div>
+<body data-page="{{ page_key or '' }}" data-user="{{ username or '' }}">
+  <div id="toast" class="toast" aria-live="polite"></div>
+  {% block body %}{% endblock %}
 </body>
 </html>

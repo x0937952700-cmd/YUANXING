@@ -1,30 +1,28 @@
-
-{% extends "base.html" %}
+{% extends 'base.html' %}
+{% set title = '沅興木業' %}
 {% block body %}
-<div class="home-screen">
-  <div class="hero center">
-    <div class="eyebrow">AI OCR 智慧辨識 + 倉庫定位 + 出貨管理</div>
-    <h1 class="page-title center">沅興木業</h1>
-    <div class="home-top-actions">
-      <div class="user-pill">{{ username }}</div>
-      <a class="home-mini-btn" href="{{ url_for('settings_page') }}">設定</a>
-      <button class="home-mini-btn" onclick="logout()">登出</button>
+<main class="home-shell">
+  <header class="topbar">
+    <div></div>
+    <div class="top-actions">
+      <a class="ghost-btn icon-btn" href="{{ url_for('settings_page') }}" target="_blank" rel="noopener">設定</a>
+      <button class="ghost-btn icon-btn" id="logout-btn">登出</button>
     </div>
-  </div>
+  </header>
 
-  <div class="home-menu vertical">
-    <a class="menu-btn" href="{{ url_for('inventory_page') }}" target="_self">庫存</a>
-    <a class="menu-btn" href="{{ url_for('orders_page') }}" target="_self">訂單</a>
-    <a class="menu-btn" href="{{ url_for('master_order_page') }}" target="_self">總單</a>
-    <a class="menu-btn" href="{{ url_for('ship_page') }}" target="_self">出貨</a>
-    <a class="menu-btn" href="{{ url_for('shipping_query_page') }}" target="_self">出貨查詢</a>
-    <a class="menu-btn" href="{{ url_for('warehouse_page') }}" target="_self">倉庫圖</a>
-    <a class="menu-btn" href="{{ url_for('customers_page') }}" target="_self">客戶資料</a>
-  </div>
+  <section class="hero">
+    <h1 class="brand-title">沅興木業</h1>
+    <p class="brand-sub">AI OCR 智慧辨識 × 倉庫定位 × 訂單管理 × 出貨扣庫存</p>
+  </section>
 
-  <div class="feature-card glass">
-    <div class="section-title">商業級操作介面</div>
-    <h2 class="feature-head">手機拍照 / 相簿上傳 / OCR / 人工修正 / 自動學習</h2>
-  </div>
-</div>
+  <section class="home-menu">
+    <a class="menu-btn" href="{{ url_for('inventory_page') }}" target="_blank" rel="noopener">庫存</a>
+    <a class="menu-btn" href="{{ url_for('order_page') }}" target="_blank" rel="noopener">訂單</a>
+    <a class="menu-btn" href="{{ url_for('master_order_page') }}" target="_blank" rel="noopener">總單</a>
+    <a class="menu-btn" href="{{ url_for('ship_page') }}" target="_blank" rel="noopener">出貨</a>
+    <a class="menu-btn" href="{{ url_for('shipping_records_page') }}" target="_blank" rel="noopener">出貨查詢</a>
+    <a class="menu-btn" href="{{ url_for('warehouse_page') }}" target="_blank" rel="noopener">倉庫圖</a>
+    <a class="menu-btn" href="{{ url_for('customers_page') }}" target="_blank" rel="noopener">客戶資料</a>
+  </section>
+</main>
 {% endblock %}
