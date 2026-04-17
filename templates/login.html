@@ -1,22 +1,45 @@
-{% extends "base.html" %}
-{% block body %}
-<div class="login-wrap">
-  <div class="brand-card">
-    <div class="brand-mark">沅</div>
-    <div>
-      <div class="eyebrow">AI OCR 智慧辨識 + 倉庫定位 + 出貨管理</div>
+
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>沅興木業｜登入</title>
+  <link rel="stylesheet" href="/static/style.css?v=5">
+  <meta name="theme-color" content="#f4f1ea">
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="login-logo">木</div>
       <h1>沅興木業</h1>
+      <p>AI OCR 智慧倉庫系統</p>
+      {% if error %}<div class="note-box red">{{ error }}</div>{% endif %}
+      <div class="login-form">
+        <div>
+          <div class="label">帳號</div>
+          <input class="input" id="username" placeholder="員工姓名" autocomplete="username">
+        </div>
+        <div>
+          <div class="label">密碼</div>
+          <input class="input" id="password" type="password" placeholder="第一次輸入密碼" autocomplete="current-password">
+        </div>
+        <div class="grid2">
+          <label class="small-pill"><input id="remember" type="checkbox" checked> 記住登入</label>
+          <label class="small-pill"><input id="saveCreds" type="checkbox"> 記住帳密（本機）</label>
+        </div>
+        <button class="big-btn" onclick="App.login()">登入系統</button>
+        <div class="helper">登入後可直接使用庫存、訂單、總單、出貨、出貨查詢、倉庫圖、客戶資料。</div>
+      </div>
     </div>
   </div>
 
-  <form id="loginForm" class="panel login-panel">
-    <label>帳號</label>
-    <input id="username" name="username" autocomplete="username" placeholder="員工姓名" required>
-    <label>密碼</label>
-    <input id="password" name="password" type="password" autocomplete="current-password" placeholder="第一次登入輸入密碼" required>
-    <button class="btn primary full" type="submit">登入</button>
-    <p class="muted small">首次登入會自動建立帳號。</p>
-    <div id="loginError" class="error-box"></div>
-  </form>
-</div>
-{% endblock %}
+<script>
+window.APP_CONFIG = {};
+</script>
+<script src="/static/app.js?v=9"></script>
+<script>
+document.addEventListener('DOMContentLoaded', () => App.initLogin());
+</script>
+</body>
+</html>

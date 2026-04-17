@@ -1,988 +1,978 @@
-(function(){
-  const state = {
-    currentPage: window.APP_BOOT?.page || "home",
-    module: window.APP_BOOT?.module || "",
-    user: window.APP_BOOT?.user || "",
-    badge: Number(window.APP_BOOT?.badge || 0),
-    zone: "A",
-    warehouseSearch: "",
-    warehouseData: [],
-    notifications: [],
-    latestNotificationId: 0,
-    customers: [],
-    inventory: [],
-    ocrItems: [],
-    currentOcrText: "",
-    currentConfidence: 0,
-    lastTodayHash: ""
-  };
 
-  const $ = (sel, root=document) => root.querySelector(sel);
-  const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
+const App = {
+  state: {
+    module: window.APP_CONFIG?.module || null,
+    inventory: window.APP_CONFIG?.inventory || [],
+    orders: window.APP_CONFIG?.orders || [],
+    masters: window.APP_CONFIG?.masters || [],
+    shippingRecords: window.APP_CONFIG?.shippingRecords || [],
+    customers: window.APP_CONFIG?.customers || [],
+    warehouseA: window.APP_CONFIG?.warehouseA || [],
+    warehouseB: window.APP_CONFIG?.warehouseB || [],
+    notifications: window.APP_CONFIG?.notifications || [],
+    logs: window.APP_CONFIG?.logs || [],
+    discrepancies: window.APP_CONFIG?.discrepancies || [],
+    summary: window.APP_CONFIG?.summary || {},
+    backups: window.APP_CONFIG?.backups || [],
+    settings: window.APP_CONFIG?.settings || [],
+    activeZone: 'A',
+    editMode: true,
+    lastNotifId: 0,
+    ocrCache: {},
+    loaded: false,
+  },
 
-  function escapeHtml(s){
-    return String(s ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  }
+  initLogin() {
+    const user = localStorage.getItem('username') || '';
+    const pass = localStorage.getItem('password') || '';
+    if (user) document.getElementById('username').value = user;
+    if (pass) document.getElementById('password').value = pass;
+    const remember = localStorage.getItem('remember') !== '0';
+    const saveCreds = localStorage.getItem('saveCreds') === '1';
+    document.getElementById('remember').checked = remember;
+    document.getElementById('saveCreds').checked = saveCreds;
+    if (user && pass) {
+      App.login(true);
+    }
+  },
 
-  function toast(msg){
-    const stack = $("#toastStack");
-    if(!stack) return;
-    const el = document.createElement("div");
-    el.className = "toast";
-    el.textContent = msg;
-    stack.appendChild(el);
-    setTimeout(() => { el.style.opacity = "0"; el.style.transform = "translateY(-10px)"; }, 2200);
-    setTimeout(() => el.remove(), 2800);
-  }
+  toast(title, message='', type='good', timeout=2400) {
+    const wrap = document.getElementById('toastContainer');
+    if (!wrap) return;
+    const node = document.createElement('div');
+    node.className = `toast ${type}`;
+    node.innerHTML = `<strong>${title}</strong>${message ? `<div>${message}</div>` : ''}`;
+    wrap.appendChild(node);
+    setTimeout(() => {
+      node.style.opacity = '0';
+      node.style.transform = 'translateY(-8px)';
+      node.style.transition = 'all .2s ease';
+      setTimeout(() => node.remove(), 240);
+    }, timeout);
+  },
 
-  function openModal(sel){
-    const m = $(sel);
-    if(m) m.hidden = false;
-  }
-  function closeModal(sel){
-    const m = $(sel);
-    if(m) m.hidden = true;
-  }
+  openModal(title, html) {
+    document.getElementById('modalTitle').innerText = title;
+    document.getElementById('modalContent').innerHTML = html;
+    document.getElementById('modalBackdrop').classList.add('show');
+  },
 
-  async function api(url, options={}){
+  closeModal() {
+    document.getElementById('modalBackdrop').classList.remove('show');
+  },
+
+  async fetchJSON(url, options={}) {
     const res = await fetch(url, {
-      headers: {"X-Requested-With":"fetch"},
+      headers: { 'Accept': 'application/json', ...(options.headers || {}) },
       ...options
     });
-    if (res.headers.get("content-type")?.includes("application/json")) {
-      const data = await res.json();
-      if (!res.ok || data.success === false) throw new Error(data.error || "請求失敗");
-      return data;
+    const txt = await res.text();
+    let data;
+    try { data = JSON.parse(txt); }
+    catch (e) {
+      console.error('Non-JSON response:', txt);
+      throw new Error('伺服器回傳格式錯誤');
     }
-    if (!res.ok) throw new Error("請求失敗");
-    return res.text();
-  }
+    if (!res.ok || data.success === false) {
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    return data;
+  },
 
-  async function postJson(url, payload){
-    return api(url, {
-      method:"POST",
-      headers: {"Content-Type":"application/json"},
-      body: JSON.stringify(payload || {})
-    });
-  }
+  async login(auto=false) {
+    const username = (document.getElementById('username').value || '').trim();
+    const password = (document.getElementById('password').value || '').trim();
+    const remember = !!document.getElementById('remember').checked;
+    const saveCreds = !!document.getElementById('saveCreds').checked;
+    if (!username || !password) {
+      if (!auto) App.toast('請輸入帳號與密碼', '', 'warn');
+      return;
+    }
+    try {
+      const data = await App.fetchJSON('/api/login', {
+        method: 'POST',
+        body: JSON.stringify({ username, password, remember })
+      });
+      localStorage.setItem('username', username);
+      localStorage.setItem('remember', remember ? '1' : '0');
+      localStorage.setItem('saveCreds', saveCreds ? '1' : '0');
+      if (saveCreds) localStorage.setItem('password', password);
+      else localStorage.removeItem('password');
+      App.toast('登入成功', username, 'good');
+      window.location.href = '/';
+    } catch (e) {
+      if (!auto) App.toast('登入失敗', e.message, 'bad');
+    }
+  },
 
-  function wireCommon(){
-    document.addEventListener("click", (e) => {
-      const btn = e.target.closest("[data-close]");
-      if(btn){
-        closeModal(btn.getAttribute("data-close"));
+  async changePassword() {
+    try {
+      await App.fetchJSON('/api/change_password', {
+        method: 'POST',
+        body: JSON.stringify({
+          old_password: document.getElementById('oldPassword').value.trim(),
+          new_password: document.getElementById('newPassword').value.trim(),
+          confirm_password: document.getElementById('confirmPassword').value.trim(),
+        })
+      });
+      App.toast('密碼已修改', '', 'good');
+      ['oldPassword','newPassword','confirmPassword'].forEach(id => document.getElementById(id).value = '');
+    } catch (e) {
+      App.toast('修改失敗', e.message, 'bad');
+    }
+  },
+
+  pickFile(module) {
+    const input = document.getElementById(`${module}File`);
+    if (input) input.click();
+  },
+
+  triggerCamera(module) {
+    const input = document.getElementById(`${module}File`);
+    if (input) input.click();
+  },
+
+  async handleUpload(module, input) {
+    if (!input.files || !input.files[0]) return;
+    const file = input.files[0];
+    const confidenceNode = document.getElementById(`${module}Confidence`);
+    const textNode = document.getElementById(`${module}OcrText`);
+    if (confidenceNode) confidenceNode.innerText = '辨識中...';
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('blue_only', '1');
+      const res = await fetch('/api/upload_ocr', { method: 'POST', body: formData });
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); } catch (e) { throw new Error('伺服器回傳格式錯誤'); }
+      if (!res.ok || data.success === false) throw new Error(data.error || 'OCR失敗');
+      if (textNode) textNode.value = data.text || '';
+      if (confidenceNode) confidenceNode.innerText = `${data.confidence || 0}%`;
+      if (data.warning) App.toast('提醒', data.warning, 'warn');
+      if (data.duplicate) App.toast('重複圖片', '仍已輸出辨識結果', 'good');
+      App.state.ocrCache[module] = data.text || '';
+      if (data.customer_guess && document.getElementById(`${module}Customer`)) {
+        document.getElementById(`${module}Customer`).value = data.customer_guess;
       }
-      const modal = e.target.classList.contains("modal") ? e.target : null;
-      if(modal) modal.hidden = true;
-    });
-
-    const settingsBtn = $("#settingsBtn");
-    if(settingsBtn){
-      settingsBtn.addEventListener("click", () => openModal("#settingsModal"));
+      App.renderPreview(module, data);
+      App.toast('OCR 完成', `${(data.items || []).length} 筆`, 'good');
+    } catch (e) {
+      if (confidenceNode) confidenceNode.innerText = '--';
+      App.toast('OCR 失敗', e.message, 'bad');
+    } finally {
+      input.value = '';
     }
-    const logoutBtn = $("#logoutBtn");
-    if(logoutBtn){
-      logoutBtn.addEventListener("click", async () => {
-        await postJson("/api/logout", {});
-        window.location.href = "/login";
-      });
-    }
-    const todayBtn = $("#todayChangesBtn");
-    if(todayBtn){
-      todayBtn.addEventListener("click", async () => {
-        openModal("#todayModal");
-        await loadTodayModal();
-      });
-    }
-    const savePasswordBtn = $("#savePasswordBtn");
-    if(savePasswordBtn){
-      savePasswordBtn.addEventListener("click", async () => {
-        const old_password = $("#oldPassword").value.trim();
-        const new_password = $("#newPassword").value.trim();
-        const confirm = $("#confirmPassword").value.trim();
-        const box = $("#passwordMsg");
-        box.textContent = "";
-        if(new_password !== confirm){
-          box.textContent = "新密碼與確認密碼不一致";
-          return;
-        }
-        try{
-          await postJson("/api/change_password", {old_password, new_password});
-          box.textContent = "密碼已更新";
-          toast("密碼已更新");
-          setTimeout(() => closeModal("#settingsModal"), 600);
-        }catch(err){
-          box.textContent = err.message;
-        }
-      });
-    }
-  }
+  },
 
-  async function loadTodayModal(){
-    const root = $("#todayModalContent");
-    if(!root) return;
-    const data = await api("/api/today_changes");
-    const s = data.summary || {};
-    const logs = data.logs || [];
-    const notifications = data.notifications || [];
-    refreshBadge(s.unread_notifications || 0);
-    root.innerHTML = `
-      <section class="summary-grid" style="margin-top:0">
-        <div class="summary-card"><span>今日新增</span><strong>${s.new_count || 0}</strong></div>
-        <div class="summary-card"><span>今日出貨量</span><strong>${s.ship_count || 0}</strong></div>
-        <div class="summary-card"><span>未上架商品</span><strong>${s.unplaced_count || 0}</strong></div>
-        <div class="summary-card"><span>異常紀錄</span><strong>${s.anomaly_count || 0}</strong></div>
-      </section>
-      <div class="hr"></div>
-      <h4>通知列表</h4>
-      <div class="detail-list">
-        ${(notifications.length ? notifications : []).map(n => `
-          <div class="detail-item">
-            <div><strong>${escapeHtml(n.username || "系統")}</strong>｜${escapeHtml(n.message || "")}</div>
-            <div class="meta">${escapeHtml(n.created_at || "")}｜${escapeHtml(n.kind || "")}</div>
-          </div>
-        `).join("") || '<div class="muted">今日沒有通知</div>'}
-      </div>
-      <div class="hr"></div>
-      <h4>操作歷史</h4>
-      <div class="detail-list">
-        ${(logs.length ? logs : []).map(log => `
-          <div class="detail-item">
-            <div><strong>${escapeHtml(log.username || "")}</strong>｜${escapeHtml(log.action || "")}</div>
-            <div class="meta">${escapeHtml(log.created_at || "")}｜${escapeHtml(log.target_type || "")} ${escapeHtml(log.target_name || "")}</div>
-          </div>
-        `).join("") || '<div class="muted">今日沒有操作紀錄</div>'}
-      </div>
-    `;
-  }
 
-  async function pollNotifications(){
-    try{
-      const data = await api("/api/notifications?limit=50");
-      const items = data.items || [];
-      if(!items.length) return;
-      const latest = items[0].id;
-      if(state.latestNotificationId && latest > state.latestNotificationId){
-        const newItems = items.filter(i => i.id > state.latestNotificationId).reverse();
-        newItems.forEach(i => toast(i.message || "有新通知"));
-        state.latestNotificationId = latest;
-        refreshBadge(items.filter(i => i.read_flag == 0).length);
-      }else if(!state.latestNotificationId){
-        state.latestNotificationId = latest;
-        refreshBadge(items.filter(i => i.read_flag == 0).length);
-      }
-    }catch(e){}
-  }
-
-  function refreshBadge(count){
-    const btn = $("#todayChangesBtn");
-    if(btn) btn.setAttribute("data-badge", String(count || 0));
-  }
-
-  async function renderHomeExtras(){
-    await pollNotifications();
-    setInterval(pollNotifications, 6000);
-  }
-
-  // ===== modules =====
-  async function initModule(){
-    const module = state.module;
-    const root = $("#moduleRoot");
-    const title = $("#moduleTitle");
-    if(!root || !title) return;
-
-    const titles = {
-      inventory: "庫存",
-      orders: "訂單",
-      master_orders: "總單",
-      shipping: "出貨",
-      shipping_records: "出貨查詢",
-      warehouse: "倉庫圖",
-      customers: "客戶資料",
-      today_changes: "今日異動"
+  renderCustomerChips(module) {
+    const el = document.getElementById(`${module}CustomerChips`);
+    if (!el) return;
+    const groups = {
+      '北區': ['北區','north','N'],
+      '中區': ['中區','central','C'],
+      '南區': ['南區','south','S'],
+      '其他': []
     };
-    title.textContent = titles[module] || "模組";
-
-    if(module === "inventory") return renderInventory();
-    if(module === "orders") return renderOrder("orders");
-    if(module === "master_orders") return renderOrder("master_orders");
-    if(module === "shipping") return renderShipping();
-    if(module === "shipping_records") return renderShippingRecords();
-    if(module === "warehouse") return renderWarehouse();
-    if(module === "customers") return renderCustomers();
-    if(module === "today_changes") return renderTodayChanges();
-  }
-
-  function fileUploaderHtml(mode){
-    return `
-      <div class="upload-area">
-        <div class="upload-actions">
-          <button class="btn primary" data-album-btn="${mode}">上傳檔案（相簿 / 拍照）</button>
-          <button class="btn secondary" data-camera-btn="${mode}">拍照上傳</button>
-          <span class="confidence-chip" id="${mode}ConfidenceChip">信心值：0%</span>
-          <button class="btn ghost small" data-reset-ocr="${mode}">重新整理</button>
+    const customers = App.state.customers || [];
+    const byRegion = { '北區': [], '中區': [], '南區': [], '其他': [] };
+    customers.forEach(c => {
+      const region = (c.region || '').trim();
+      if (region.includes('北')) byRegion['北區'].push(c);
+      else if (region.includes('中')) byRegion['中區'].push(c);
+      else if (region.includes('南')) byRegion['南區'].push(c);
+      else byRegion['其他'].push(c);
+    });
+    el.innerHTML = Object.keys(byRegion).map(region => `
+      <div class="card soft" style="padding:12px;border-radius:18px">
+        <div class="toolbar">
+          <strong>${region}</strong>
+          <span class="small muted">可拖曳分類</span>
         </div>
-        <input class="file-input" type="file" accept="image/*" id="${mode}AlbumInput">
-        <input class="file-input" type="file" accept="image/*" capture="environment" id="${mode}CameraInput">
+        <div class="chips" data-region="${region}" ondragover="event.preventDefault()" ondrop="App.dropCustomerRegion(event, '${region}')">
+          ${byRegion[region].map(c => `
+            <span class="chip" draggable="true" ondragstart="App.dragCustomer(event, ${JSON.stringify(c.customer_name || '')}, ${JSON.stringify(c.region || '')})" onclick="App.chooseCustomer('${module}', ${JSON.stringify(c.customer_name || '')})">
+              ${c.customer_name || ''}
+            </span>
+          `).join('')}
+        </div>
       </div>
-    `;
-  }
+    `).join('');
+  },
 
-  async function handleOCRUpload(mode, file){
-    const form = new FormData();
-    form.append("file", file);
-    // Optional: if you later add crop selection, these can be sent too.
-    const customer = $(`#${mode}Customer`);
-    if(customer) form.append("customer_keyword", customer.value.trim());
+  dragCustomer(ev, name, region) {
+    ev.dataTransfer.setData('text/plain', JSON.stringify({ name, region }));
+  },
 
-    const res = await fetch("/api/upload_ocr", {method:"POST", body:form});
-    const data = await res.json();
-    if(!res.ok || data.success === false) throw new Error(data.error || "OCR失敗");
-    state.currentOcrText = data.text || "";
-    state.currentConfidence = Number(data.confidence || 0);
-    state.ocrItems = data.items || [];
-    const chip = $(`#${mode}ConfidenceChip`);
-    if(chip) chip.textContent = `信心值：${state.currentConfidence}%`;
-    const box = $(`#${mode}OcrText`);
-    if(box) box.value = state.currentOcrText;
-    const warn = $(`#${mode}Warning`);
-    if(warn) warn.textContent = data.warning || "";
-    const cust = $(`#${mode}Customer`);
-    if(cust && data.customer_name) cust.value = data.customer_name;
-    if(data.warning) toast(data.warning);
-  }
+  async dropCustomerRegion(ev, region) {
+    ev.preventDefault();
+    try {
+      const data = JSON.parse(ev.dataTransfer.getData('text/plain'));
+      if (!data.name) return;
+      await App.fetchJSON('/api/customers/update', {
+        method: 'POST',
+        body: JSON.stringify({ customer_name: data.name, region })
+      });
+      App.toast('已分類', `${data.name} → ${region}`, 'good');
+      await App.loadCustomers();
+      if (['orders','master_orders','shipping'].includes(App.state.module)) App.renderCustomerChips(App.state.module);
+    } catch (e) {
+      App.toast('分類失敗', e.message, 'bad');
+    }
+  },
 
-  function bindUploadButtons(mode){
-    const albumBtn = $(`[data-album-btn="${mode}"]`);
-    const cameraBtn = $(`[data-camera-btn="${mode}"]`);
-    const albumInput = $(`#${mode}AlbumInput`);
-    const cameraInput = $(`#${mode}CameraInput`);
-    albumBtn?.addEventListener("click", () => albumInput?.click());
-    cameraBtn?.addEventListener("click", () => cameraInput?.click());
-    albumInput?.addEventListener("change", async () => {
-      const file = albumInput.files?.[0];
-      if(file) await handleOCRUpload(mode, file).catch(err => toast(err.message));
-      albumInput.value = "";
-    });
-    cameraInput?.addEventListener("change", async () => {
-      const file = cameraInput.files?.[0];
-      if(file) await handleOCRUpload(mode, file).catch(err => toast(err.message));
-      cameraInput.value = "";
-    });
-    $(`[data-reset-ocr="${mode}"]`)?.addEventListener("click", () => {
-      const box = $(`#${mode}OcrText`);
-      if(box) box.value = "";
-      const warn = $(`#${mode}Warning`);
-      if(warn) warn.textContent = "";
-    });
-  }
-
-  async function renderInventory(){
-    const root = $("#moduleRoot");
-    root.innerHTML = `
-      <section class="section">
-        <div class="top-bar">
-          <div>
-            <h3>庫存</h3>
-            <div class="muted">直接顯示商品，不顯示客戶分類。</div>
-          </div>
-          <div class="search-row">
-            <input id="invSearch" placeholder="搜尋商品 / 格位">
-            <button class="btn secondary" id="invRefresh">重新整理</button>
-          </div>
+  renderPreview(module, data) {
+    const el = document.getElementById(`${module}Preview`);
+    if (!el) return;
+    const items = data.items || [];
+    el.innerHTML = items.map((item, idx) => `
+      <div class="list-item">
+        <div class="meta">
+          <div class="title">${item.product || item.product_name || ''}</div>
+          <div class="desc">${item.quantity || 1}</div>
         </div>
-        <div id="inventoryPanel" class="list"></div>
-      </section>
-    `;
-    const load = async () => {
-      const data = await api("/api/inventory");
-      state.inventory = data.items || [];
-      const q = ($("#invSearch").value || "").trim().toLowerCase();
-      const filtered = state.inventory.filter(i =>
-        !q || [i.product, i.location, i.customer_name].join(" ").toLowerCase().includes(q)
-      );
-      $("#inventoryPanel").innerHTML = filtered.map(item => `
-        <div class="card ${item.unplaced_qty > 0 ? 'red' : ''}">
-          <div class="top-bar">
-            <div>
-              <div><strong>${escapeHtml(item.product || "")}</strong> ${item.unplaced_qty > 0 ? '<span class="badge red">未上架</span>' : '<span class="badge green">已上架</span>'}</div>
-              <div class="meta">數量：${item.quantity || 0}｜格位：${escapeHtml(item.location || "-")}${item.customer_name ? `｜客戶：${escapeHtml(item.customer_name)}` : ""}</div>
-            </div>
-            <div class="badge ${item.unplaced_qty > 0 ? 'red' : 'gray'}">未上架 ${item.unplaced_qty || 0}</div>
-          </div>
-          <div class="meta">操作人員：${escapeHtml(item.operator || "-")}｜更新：${escapeHtml(item.updated_at || "-")}</div>
-        </div>
-      `).join("") || '<div class="muted">沒有庫存資料</div>';
-    };
-    $("#invSearch").addEventListener("input", load);
-    $("#invRefresh").addEventListener("click", load);
-    await load();
-    setInterval(load, 8000);
-  }
+        <div class="small">#${idx+1}</div>
+      </div>
+    `).join('') || '<div class="note-box">尚未辨識到內容</div>';
+  },
 
-  function orderEditorHtml(mode){
-    const title = mode === "orders" ? "訂單" : "總單";
-    return `
-      <section class="section">
-        <div class="top-bar">
-          <div>
-            <h3>${title}</h3>
-            <div class="muted">${mode === "orders" ? "建立後預設為 pending；出貨時會依序扣總單、訂單、庫存。" : "總單頁不要顯示客戶名稱。"} </div>
-          </div>
-        </div>
+  searchCustomers(q, module) {
+    const box = document.getElementById(`${module}CustomerSug`);
+    const list = App.state.customers || [];
+    if (!box) return;
+    const query = (q || '').trim();
+    if (!query) {
+      box.style.display = 'none';
+      box.innerHTML = '';
+      return;
+    }
+    const matches = list
+      .map(x => x.customer_name || '')
+      .filter(name => name.includes(query) || query.split('').every(ch => name.includes(ch)))
+      .slice(0, 12);
+    box.innerHTML = matches.map(name => `<div class="suggestion" onclick="App.chooseCustomer('${module}', ${JSON.stringify(name)})">${name}</div>`).join('');
+    box.style.display = matches.length ? 'block' : 'none';
+  },
 
-        <div class="upload-row">
-          ${fileUploaderHtml(mode)}
-        </div>
+  chooseCustomer(module, name) {
+    const input = document.getElementById(`${module}Customer`);
+    const box = document.getElementById(`${module}CustomerSug`);
+    if (input) input.value = name;
+    if (box) { box.style.display = 'none'; box.innerHTML = ''; }
+  },
 
-        <div class="grid cols-2">
-          <div>
-            <label>客戶名稱 ${mode === "master_orders" ? '(可隱藏顯示)' : ''}</label>
-            <input id="${mode}Customer" placeholder="輸入客戶名稱，會自動比對最像的客戶">
-            <div class="muted small">輸入關鍵字會跳出完整客戶名。</div>
-            <div id="${mode}CustomerSuggest" class="chips" style="margin-top:10px"></div>
-          </div>
-          <div>
-            <label>格位 / 備註（可選）</label>
-            <input id="${mode}Location" placeholder="例如：A區1欄前6">
-          </div>
-        </div>
-
-        <label>OCR 文字框（可人工修改）</label>
-        <textarea id="${mode}OcrText" placeholder="辨識後內容會直接進來，你可自行編輯"></textarea>
-        <div class="upload-meta">
-          <span id="${mode}Warning" class="confidence-chip" style="display:inline-flex">尚未辨識</span>
-        </div>
-
-        <div class="grid cols-2" style="margin-top:14px">
-          <button class="btn primary" id="${mode}ConfirmBtn">確認送出</button>
-          <button class="btn secondary" id="${mode}SaveCorrectionBtn">記錄 AI 修正</button>
-        </div>
-
-        <div class="hr"></div>
-        <div id="${mode}Result"></div>
-      </section>
-    `;
-  }
-
-  async function renderOrder(mode){
-    const root = $("#moduleRoot");
-    root.innerHTML = orderEditorHtml(mode);
-    bindUploadButtons(mode);
-    const suggestEl = $(`#${mode}CustomerSuggest`);
-    const customerEl = $(`#${mode}Customer`);
-    const textEl = $(`#${mode}OcrText`);
-    const warnEl = $(`#${mode}Warning`);
-    const resultEl = $(`#${mode}Result`);
-
-    customerEl.addEventListener("input", async () => {
-      const q = customerEl.value.trim();
-      if(!q) { suggestEl.innerHTML = ""; return; }
-      try{
-        const data = await api(`/api/customers/suggest?q=${encodeURIComponent(q)}`);
-        suggestEl.innerHTML = (data.customers || []).map(c => `<button class="chip" data-pick-customer="${mode}" data-name="${escapeHtml(c.name)}">${escapeHtml(c.name)}</button>`).join("");
-      }catch(e){}
-    });
-    suggestEl.addEventListener("click", (e) => {
-      const btn = e.target.closest("[data-pick-customer]");
-      if(!btn) return;
-      customerEl.value = btn.dataset.name;
-      suggestEl.innerHTML = "";
-    });
-
-    $(`#${mode}ConfirmBtn`).addEventListener("click", async () => {
-      try{
-        const items = parseTextToItems(textEl.value);
-        const customer_name = customerEl.value.trim();
-        if(!items.length) throw new Error("請先 OCR 或輸入內容");
-        const payload = {customer_name, items};
-        const endpoint = mode === "orders" ? "/api/orders/save" : "/api/master_orders/save";
-        const data = await postJson(endpoint, payload);
-        resultEl.innerHTML = `
-          <div class="card">
-            <strong>已送出</strong>
-            <div class="meta">${mode === "orders" ? "訂單建立完成" : "總單已更新"}</div>
-            <div class="detail-list" style="margin-top:10px">
-              ${items.map(i => `<div class="detail-item">${escapeHtml(i.product)} × ${i.quantity}</div>`).join("")}
-            </div>
-          </div>
-        `;
-        toast("已送出");
-        await pollNotifications();
-      }catch(err){ toast(err.message); }
-    });
-
-    $(`#${mode}SaveCorrectionBtn`).addEventListener("click", async () => {
-      try{
-        const lines = textEl.value.split("\n").map(v => v.trim()).filter(Boolean);
-        if(!lines.length) throw new Error("沒有內容可記錄");
-        // store identical lines as corrections, and if OCR text changed, keep it as manual correction input later
-        for(const line of lines){
-          await postJson("/api/save_correction", {wrong_text: line, correct_text: line});
-        }
-        toast("已記錄 AI 修正");
-      }catch(err){ toast(err.message); }
-    });
-
-    await renderOrderCommon(mode);
-  }
-
-  async function renderOrderCommon(mode){
-    try{
-      const data = await api("/api/customers");
-      state.customers = data.customers || [];
-      // create general dropdown suggestions? keep current.
-      if(mode === "master_orders"){
-        // hide customer label visually if needed
+  async submitModule(module) {
+    try {
+      const customer = (document.getElementById(`${module}Customer`)?.value || '').trim();
+      const ocr = (document.getElementById(`${module}OcrText`)?.value || '').trim();
+      const items = App.parseOcrLines(ocr);
+      const payload = { customer, items, note: '' };
+      let url = '';
+      if (module === 'inventory') {
+        url = '/api/inventory';
+        payload.items = items;
+        // inventory direct products, no customer categories
+      } else if (module === 'orders') {
+        url = '/api/orders';
+      } else if (module === 'master_orders') {
+        url = '/api/master_orders';
+      } else if (module === 'shipping') {
+        url = '/api/ship';
       }
-    }catch(e){}
-  }
+      if (!url) return;
+      if (!items.length && module !== 'shipping') {
+        App.toast('請先輸入內容', '', 'warn');
+        return;
+      }
+      if (module === 'shipping') {
+        if (!confirm('出貨前再次確認？')) return;
+      }
+      await App.fetchJSON(url, {
+        method: 'POST',
+        body: JSON.stringify({ customer, items, note: '' })
+      });
+      App.toast('已送出', module === 'shipping' ? '完成出貨' : '資料已建立', 'good');
+      // Learn corrections after manual edits
+      App.learnCorrection(module);
+      setTimeout(() => location.reload(), 700);
+    } catch (e) {
+      App.toast('送出失敗', e.message, 'bad');
+    }
+  },
 
-  function parseTextToItems(text){
-    const lines = String(text || "").split("\n").map(s => s.trim()).filter(Boolean);
+  parseOcrLines(text) {
+    const lines = (text || '').split('\n').map(x => x.trim()).filter(Boolean);
     return lines.map(line => {
-      const clean = line.replace(/\s+/g, "");
-      const m = clean.match(/(.+?)[=:](\d+)$/) || clean.match(/(.+?)x(\d+)$/i) || clean.match(/(.+?)\*(\d+)$/);
-      if(m){
-        return {product: m[1], quantity: Number(m[2])};
-      }
-      const m2 = clean.match(/(.+?)\s+(\d+)$/);
-      if(m2) return {product: m2[1], quantity: Number(m2[2])};
-      return {product: clean, quantity: 1};
+      let p = line;
+      let qty = 1;
+      const m = line.match(/(.+?)[=\*xX](\d+)$/);
+      if (m) { p = m[1]; qty = parseInt(m[2], 10) || 1; }
+      return { product: p, quantity: qty };
     });
-  }
+  },
 
-  async function renderShipping(){
-    const root = $("#moduleRoot");
-    root.innerHTML = `
-      <section class="section">
-        <div class="top-bar">
-          <div>
-            <h3>出貨</h3>
-            <div class="muted">先扣總單，再扣訂單，最後扣庫存，自動回滾。</div>
-          </div>
-        </div>
-        ${fileUploaderHtml("shipping")}
-        <div class="grid cols-2">
-          <div>
-            <label>客戶名稱</label>
-            <input id="shippingCustomer" placeholder="輸入客戶名稱">
-            <div id="shippingCustomerSuggest" class="chips" style="margin-top:10px"></div>
-          </div>
-          <div>
-            <label>出貨確認提示</label>
-            <div class="card">按確認前會再次提醒，避免誤出貨。</div>
-          </div>
-        </div>
-        <label>OCR 文字框（可人工修改）</label>
-        <textarea id="shippingOcrText"></textarea>
-        <div class="upload-meta">
-          <span id="shippingWarning" class="confidence-chip">尚未辨識</span>
-        </div>
-        <div class="grid cols-2" style="margin-top:14px">
-          <button class="btn primary" id="shippingConfirmBtn">確認出貨</button>
-          <button class="btn secondary" id="shippingSaveCorrectionBtn">記錄 AI 修正</button>
-        </div>
-        <div class="hr"></div>
-        <div id="shippingResult"></div>
-      </section>
-    `;
-    bindUploadButtons("shipping");
-    const customerEl = $("#shippingCustomer");
-    const suggestEl = $("#shippingCustomerSuggest");
-    const textEl = $("#shippingOcrText");
-    customerEl.addEventListener("input", async () => {
-      const q = customerEl.value.trim();
-      if(!q){ suggestEl.innerHTML = ""; return; }
-      const data = await api(`/api/customers/suggest?q=${encodeURIComponent(q)}`);
-      suggestEl.innerHTML = (data.customers || []).map(c => `<button class="chip" data-name="${escapeHtml(c.name)}">${escapeHtml(c.name)}</button>`).join("");
-    });
-    suggestEl.addEventListener("click", e => {
-      const btn = e.target.closest("button[data-name]");
-      if(!btn) return;
-      customerEl.value = btn.dataset.name;
-      suggestEl.innerHTML = "";
-    });
-    $("#shippingConfirmBtn").addEventListener("click", async () => {
-      if(!confirm("確認要出貨嗎？")) return;
-      try{
-        const items = parseTextToItems(textEl.value);
-        const customer_name = customerEl.value.trim();
-        const data = await postJson("/api/ship", {customer_name, items});
-        $("#shippingResult").innerHTML = `
-          <div class="card">
-            <strong>出貨完成</strong>
-            <div class="meta">客戶：${escapeHtml(data.customer || "")}</div>
-            <div class="detail-list" style="margin-top:10px">
-              ${(data.details || []).map(d => `<div class="detail-item">${escapeHtml(d.product)} × ${d.qty}｜總單 ${d.master}｜訂單 ${d.order}｜庫存 ${d.inventory}</div>`).join("")}
-            </div>
-          </div>`;
-        toast("已完成出貨");
-        await pollNotifications();
-      }catch(err){ toast(err.message); }
-    });
-    $("#shippingSaveCorrectionBtn").addEventListener("click", async () => {
-      const lines = textEl.value.split("\n").map(v => v.trim()).filter(Boolean);
-      for(const line of lines){
-        await postJson("/api/save_correction", {wrong_text: line, correct_text: line});
+  async learnCorrection(module) {
+    const original = App.state.ocrCache[module] || '';
+    const edited = (document.getElementById(`${module}OcrText`)?.value || '').trim();
+    if (!original || !edited || original === edited) return;
+    const origLines = original.split('\n').filter(Boolean);
+    const editLines = edited.split('\n').filter(Boolean);
+    // simple line-by-line learning
+    for (let i = 0; i < Math.min(origLines.length, editLines.length); i++) {
+      if (origLines[i] !== editLines[i]) {
+        try {
+          await App.fetchJSON('/api/save_correction', {
+            method: 'POST',
+            body: JSON.stringify({ wrong_text: origLines[i], correct_text: editLines[i] })
+          });
+        } catch (e) {}
       }
-      toast("已記錄 AI 修正");
-    });
-  }
+    }
+  },
 
-  async function renderShippingRecords(){
-    const root = $("#moduleRoot");
-    root.innerHTML = `
-      <section class="section">
-        <div class="top-bar">
-          <div>
-            <h3>出貨查詢</h3>
-            <div class="muted">可選 3 / 7 / 10 / 15 天內資料。</div>
-          </div>
-          <div class="search-row">
-            <select id="recordDays">
-              <option value="">全部</option>
-              <option value="3">3 天</option>
-              <option value="7">7 天</option>
-              <option value="10">10 天</option>
-              <option value="15">15 天</option>
-            </select>
-            <button class="btn secondary" id="recordRefresh">查詢</button>
-          </div>
-        </div>
-        <div id="recordsRoot"></div>
-      </section>
+  filterInventory(q) {
+    const rows = document.querySelectorAll('#inventoryTable tr');
+    const query = (q || '').trim();
+    rows.forEach(row => {
+      const t = row.innerText;
+      row.style.display = !query || t.includes(query) ? '' : 'none';
+    });
+  },
+
+  filterShipDays(days) {
+    App.loadShippingRecords(days);
+  },
+
+  async loadShippingRecords(days='') {
+    try {
+      const url = days ? `/api/shipping_records?days=${encodeURIComponent(days)}` : '/api/shipping_records';
+      const data = await App.fetchJSON(url);
+      const tbody = document.getElementById('shippingRecordsTable');
+      if (!tbody) return;
+      tbody.innerHTML = data.records.map(r => `
+        <tr>
+          <td>${r.customer || ''}</td>
+          <td>${r.product || ''}</td>
+          <td>${r.qty || 0}</td>
+          <td>${r.operator || ''}</td>
+          <td>${r.shipped_at || ''}</td>
+          <td>${r.detail || ''}</td>
+        </tr>
+      `).join('') || '<tr><td colspan="6" class="center-note">尚無出貨資料</td></tr>';
+    } catch (e) {}
+  },
+
+  async loadCustomers() {
+    try {
+      const data = await App.fetchJSON('/api/customers');
+      App.state.customers = data.items || [];
+      const tbody = document.getElementById('customersTable');
+      if (!tbody) return;
+      tbody.innerHTML = data.items.map(c => `
+        <tr>
+          <td><input class="input" data-customer-name="${c.customer_name}" value="${c.customer_name || ''}" disabled></td>
+          <td><input class="input" id="phone-${encodeURIComponent(c.customer_name)}" value="${c.phone || ''}"></td>
+          <td><input class="input" id="address-${encodeURIComponent(c.customer_name)}" value="${c.address || ''}"></td>
+          <td><input class="input" id="special-${encodeURIComponent(c.customer_name)}" value="${c.special_requests || ''}"></td>
+          <td><input class="input" id="region-${encodeURIComponent(c.customer_name)}" value="${c.region || ''}"></td>
+          <td><button class="primary" onclick="App.saveCustomer(${JSON.stringify(c.customer_name)})">儲存</button></td>
+        </tr>
+      `).join('') || '<tr><td colspan="6" class="center-note">尚無客戶資料</td></tr>';
+      if (['orders','master_orders','shipping'].includes(App.state.module)) App.renderCustomerChips(App.state.module);
+    } catch (e) {}
+  },
+
+  async saveCustomer(name) {
+    try {
+      const enc = encodeURIComponent(name);
+      await App.fetchJSON('/api/customers/update', {
+        method: 'POST',
+        body: JSON.stringify({
+          customer_name: name,
+          phone: document.getElementById(`phone-${enc}`)?.value || '',
+          address: document.getElementById(`address-${enc}`)?.value || '',
+          special_requests: document.getElementById(`special-${enc}`)?.value || '',
+          region: document.getElementById(`region-${enc}`)?.value || '',
+        })
+      });
+      App.toast('已儲存', name, 'good');
+      App.reloadCustomers();
+    } catch (e) {
+      App.toast('儲存失敗', e.message, 'bad');
+    }
+  },
+
+  async reloadCustomers() {
+    await App.loadCustomers();
+  },
+
+  renderInventory() {
+    const tbody = document.getElementById('inventoryTable');
+    if (!tbody) return;
+    const rows = (window.APP_CONFIG.rawInventory || App.state.inventory || []).length ? (window.APP_CONFIG.rawInventory || App.state.inventory) : App.state.inventory;
+    const items = App.state.inventory || [];
+    tbody.innerHTML = items.map(item => {
+      const isRed = item.is_unplaced || !item.locations || !item.locations.length;
+      const loc = (item.locations || []).join(', ');
+      const cust = (item.customers || []).join(', ');
+      return `
+        <tr class="${isRed ? 'red' : ''}">
+          <td>${item.product || ''}</td>
+          <td>${item.quantity || 0}</td>
+          <td class="${isRed ? 'red' : ''}">${loc || '未上架'}</td>
+          <td>${cust || ''}</td>
+          <td>${isRed ? '<span class="red">尚未錄入倉庫圖</span>' : '<span class="green">已上架</span>'}</td>
+        </tr>
+      `;
+    }).join('') || '<tr><td colspan="5" class="center-note">尚無庫存資料</td></tr>';
+    App.filterInventory(document.getElementById('inventorySearch')?.value || '');
+  },
+
+  renderOrders() {
+    const tbody = document.getElementById('ordersTable');
+    if (!tbody) return;
+    tbody.innerHTML = (App.state.orders || []).map(o => `
+      <tr>
+        <td>${o.customer || ''}</td>
+        <td>${o.product || ''}</td>
+        <td>${o.qty || 0}</td>
+        <td>${o.status || ''}</td>
+        <td>${o.created_at || ''}</td>
+      </tr>
+    `).join('') || '<tr><td colspan="5" class="center-note">尚無訂單資料</td></tr>';
+  },
+
+  renderMasters() {
+    const tbody = document.getElementById('mastersTable');
+    if (!tbody) return;
+    tbody.innerHTML = (App.state.masters || []).map(m => `
+      <tr>
+        <td>${m.product || ''}</td>
+        <td>${m.qty || 0}</td>
+        <td>${m.updated_at || ''}</td>
+      </tr>
+    `).join('') || '<tr><td colspan="3" class="center-note">尚無總單資料</td></tr>';
+  },
+
+  renderSummaryCards() {
+    const s = App.state.summary || {};
+    const el = document.getElementById('todayStats');
+    if (!el) return;
+    el.innerHTML = `
+      <div class="stat"><div class="label">今日新增</div><div class="value">${s.order_count || 0}</div></div>
+      <div class="stat"><div class="label">今日出貨</div><div class="value">${s.today_ship_count || 0}</div></div>
+      <div class="stat"><div class="label">未上架商品</div><div class="value">${s.unplaced_count || 0}</div></div>
     `;
-    const load = async () => {
-      const days = $("#recordDays").value;
-      const data = await api(`/api/shipping_records${days ? `?days=${encodeURIComponent(days)}` : ""}`);
-      const rows = data.records || [];
-      $("#recordsRoot").innerHTML = rows.length ? `
-        <table class="table">
-          <thead><tr><th>客戶</th><th>商品</th><th>數量</th><th>操作人員</th><th>時間</th></tr></thead>
-          <tbody>
-            ${rows.map(r => `
-              <tr>
-                <td>${escapeHtml(r.customer_name || "")}</td>
-                <td>${escapeHtml(r.product || "")}</td>
-                <td>${r.qty || 0}</td>
-                <td>${escapeHtml(r.operator || "")}</td>
-                <td>${escapeHtml(r.shipped_at || "")}</td>
-              </tr>
-            `).join("")}
-          </tbody>
-        </table>
-      ` : '<div class="muted">沒有資料</div>';
+  },
+
+  renderNotifications() {
+    const list = document.getElementById('notificationsList');
+    const logsTable = document.getElementById('logsTable');
+    const reconcileList = document.getElementById('reconcileList');
+    const reconcileList2 = document.getElementById('reconcileList2');
+    const unplacedList = document.getElementById('unplacedList');
+    const shipSummary = document.getElementById('shipSummary');
+    const settingsList = document.getElementById('settingsList');
+
+    if (list) {
+      list.innerHTML = (App.state.notifications || []).map(n => `
+        <div class="list-item clickable" onclick="App.markNotificationsRead(); App.toast('${n.title || ''}','${n.message || ''}','good')">
+          <div class="meta">
+            <div class="title">${n.title || ''}</div>
+            <div class="desc">${n.created_at || ''} ｜ ${n.message || ''}</div>
+          </div>
+          <div class="small">${n.category || ''}</div>
+        </div>
+      `).join('') || '<div class="center-note">尚無通知</div>';
+    }
+
+    if (logsTable) {
+      logsTable.innerHTML = (App.state.logs || []).map(l => `
+        <tr>
+          <td>${l.username || ''}</td>
+          <td>${l.created_at || ''}</td>
+          <td>${l.action || ''}</td>
+          <td>${[l.target_type || '', l.target_name || ''].filter(Boolean).join(' / ')}</td>
+          <td>${l.detail || ''}</td>
+        </tr>
+      `).join('') || '<tr><td colspan="5" class="center-note">尚無操作歷史</td></tr>';
+    }
+
+    const renderReconcile = target => {
+      if (!target) return;
+      target.innerHTML = (App.state.discrepancies || []).map(d => `
+        <div class="list-item">
+          <div class="meta">
+            <div class="title">${d.customer || ''}｜${d.product || ''}</div>
+            <div class="desc">總單:${d.master_qty} / 訂單:${d.order_qty} / 出貨:${d.ship_qty} / 庫存:${d.inventory_qty}</div>
+          </div>
+          <div class="small red">差異</div>
+        </div>
+      `).join('') || '<div class="center-note">沒有差異</div>';
     };
-    $("#recordRefresh").addEventListener("click", load);
-    $("#recordDays").addEventListener("change", load);
-    await load();
-  }
+    renderReconcile(reconcileList);
+    renderReconcile(reconcileList2);
 
-  function buildWarehouseGrid(zone, cells){
-    const grouped = {};
-    (cells || []).forEach(c => {
-      grouped[`${c.zone}-${c.column_no}-${c.position}-${c.slot_no}`] = c;
-    });
+    if (unplacedList) {
+      unplacedList.innerHTML = (App.state.summary?.unplaced_items || []).map(i => `
+        <div class="list-item">
+          <div class="meta">
+            <div class="title red">${i.product || ''}</div>
+            <div class="desc">數量 ${i.quantity || 0}</div>
+          </div>
+          <div class="small red">未上架</div>
+        </div>
+      `).join('') || '<div class="center-note">全部已上架</div>';
+    }
 
-    const all = [];
-    for(let section = 1; section <= 6; section++){
-      const cols = [];
-      for(let col = 1; col <= 12; col++){
-        cols.push(col);
-      }
-      all.push(`
-        <div class="warehouse-section">
-          <div class="section-number">${section}</div>
-          ${cols.map(col => {
-            const fronts = [];
-            const backs = [];
-            for(let slot=1; slot<=10; slot++){
-              const f = grouped[`${zone}-${col}-front-${slot}`];
-              const b = grouped[`${zone}-${col}-back-${slot}`];
-              fronts.push(`<div class="slot ${f ? 'filled' : 'empty'} ${f && f.product && f.qty < 0 ? 'red':''}" data-cell='${encodeURIComponent(JSON.stringify({zone,column_no:col,position:"front",slot_no:slot}))}'>${f ? escapeHtml(f.product || f.customer_name || f.qty || "已錄入") : slot}</div>`);
-              backs.push(`<div class="slot ${b ? 'filled' : 'empty'}" data-cell='${encodeURIComponent(JSON.stringify({zone,column_no:col,position:"back",slot_no:slot}))}'>${b ? escapeHtml(b.product || b.customer_name || b.qty || "已錄入") : slot}</div>`);
-            }
-            return `
-              <div class="col-card" data-col="${col}">
-                <div class="col-title">${col}欄</div>
-                <div class="slot-row">
-                  <div class="slot-label">前</div>
-                  <div class="slot-grid">${fronts.join("")}</div>
+    if (shipSummary) {
+      shipSummary.innerHTML = (App.state.orders || []).slice(0,10).map(o => `
+        <div class="list-item">
+          <div class="meta">
+            <div class="title">${o.customer || ''}</div>
+            <div class="desc">${o.product || ''} × ${o.qty || 0}</div>
+          </div>
+          <div class="small">${o.status || ''}</div>
+        </div>
+      `).join('') || '<div class="center-note">尚無需出貨的項目</div>';
+    }
+
+    if (settingsList) {
+      settingsList.innerHTML = (App.state.settings || []).map(s => `
+        <div class="list-item">
+          <div class="meta">
+            <div class="title">${s.key || ''}</div>
+            <div class="desc">${s.value || ''}</div>
+          </div>
+        </div>
+      `).join('') || '<div class="center-note">尚無設定</div>';
+    }
+  },
+
+  showZone(zone) {
+    App.state.activeZone = zone;
+    document.getElementById('zoneA')?.classList.toggle('active', zone === 'A');
+    document.getElementById('zoneB')?.classList.toggle('active', zone === 'B');
+    document.getElementById('zoneBtnA')?.classList.toggle('active', zone === 'A');
+    document.getElementById('zoneBtnB')?.classList.toggle('active', zone === 'B');
+  },
+
+  toggleWarehouseView() {
+    App.state.editMode = !App.state.editMode;
+    App.toast('模式切換', App.state.editMode ? '編輯模式' : '檢視模式', 'good');
+  },
+
+  slotLabel(slot) {
+    if (!slot) return '<span class="slot-label">空格</span>';
+    return `
+      <div class="slot-customer">${slot.customer_name || ''}</div>
+      <div class="slot-product">${slot.product || ''} ${slot.quantity ? '×' + slot.quantity : ''}</div>
+      <div class="slot-label">${slot.note || ''}</div>
+    `;
+  },
+
+  renderWarehouse(zone, bands) {
+    const root = document.getElementById(zone === 'A' ? 'zoneA' : 'zoneB');
+    if (!root) return;
+    const html = `
+      <div class="zone-shell">
+        <div class="zone-label">${zone}</div>
+        <div class="band-list">
+          ${bands.map(b => `
+            <div class="band">
+              <div class="band-num">${b.band_no}</div>
+              <div class="band-body">
+                <div class="row-label">前排</div>
+                <div class="cell-row">
+                  ${b.front.map((slot, idx) => App.renderSlot(zone, b.band_no, 'front', idx+1, slot)).join('')}
                 </div>
-                <div class="slot-row" style="margin-top:8px">
-                  <div class="slot-label">後</div>
-                  <div class="slot-grid">${backs.join("")}</div>
+                <div class="row-label">後排</div>
+                <div class="cell-row">
+                  ${b.back.map((slot, idx) => App.renderSlot(zone, b.band_no, 'back', idx+1, slot)).join('')}
                 </div>
               </div>
-            `;
-          }).join("")}
+            </div>
+          `).join('')}
         </div>
-      `);
-    }
-    return all.join("");
-  }
-
-  async function renderWarehouse(){
-    const root = $("#moduleRoot");
-    root.innerHTML = `
-      <section class="section">
-        <div class="top-bar">
-          <div>
-            <h3>倉庫圖</h3>
-            <div class="muted">A / B 區，點格子可編輯，可搜尋商品 / 客戶 / 格位。</div>
-          </div>
-          <div class="warehouse-switch">
-            <button class="btn primary" id="zoneABtn">A倉</button>
-            <button class="btn secondary" id="zoneBBtn">B倉</button>
-            <button class="btn ghost" id="addColumnBtn">新增欄位</button>
-          </div>
-        </div>
-        <div class="search-row">
-          <input id="warehouseSearch" placeholder="搜尋商品 / 客戶 / 格位，輸入 113 直接跳出">
-          <button class="btn secondary" id="warehouseSearchBtn">搜尋</button>
-          <button class="btn secondary" id="warehouseRefreshBtn">重新整理</button>
-        </div>
-        <div class="muted small">點選已錄入格位可直接編輯，客戶名稱可輸入關鍵字自動補全完整名稱。</div>
-        <div class="warehouse-scroll" style="margin-top:12px">
-          <div id="warehouseRoot"></div>
-        </div>
-      </section>
-    `;
-    const warehouseRoot = $("#warehouseRoot");
-    async function load(){
-      const q = ($("#warehouseSearch").value || "").trim();
-      const data = q ? await api(`/api/warehouse/search?q=${encodeURIComponent(q)}`) : await api(`/api/warehouse?zone=${encodeURIComponent(state.zone)}`);
-      state.warehouseData = data.cells || [];
-      warehouseRoot.innerHTML = buildWarehouseGrid(state.zone, state.warehouseData);
-      bindWarehouseCellClicks();
-    }
-    $("#zoneABtn").addEventListener("click", async () => { state.zone="A"; await load(); });
-    $("#zoneBBtn").addEventListener("click", async () => { state.zone="B"; await load(); });
-    $("#warehouseSearchBtn").addEventListener("click", load);
-    $("#warehouseRefreshBtn").addEventListener("click", load);
-
-    $("#addColumnBtn").addEventListener("click", async () => {
-      const col = prompt("新增欄位編號（1~12）或更多：", "13");
-      if(!col) return;
-      toast("欄位已規劃：請在格位編輯中直接使用該欄位");
-    });
-
-    await load();
-    setInterval(load, 10000);
-  }
-
-  function bindWarehouseCellClicks(){
-    $$(".slot[data-cell]").forEach(el => {
-      el.addEventListener("click", () => {
-        const data = JSON.parse(decodeURIComponent(el.dataset.cell));
-        openWarehouseEditor(data);
-      });
-      el.addEventListener("dragstart", e => {
-        e.dataTransfer.setData("application/json", JSON.stringify(JSON.parse(decodeURIComponent(el.dataset.cell))));
-      });
-      el.setAttribute("draggable", "true");
-      el.addEventListener("dragover", e => e.preventDefault());
-      el.addEventListener("drop", async e => {
-        e.preventDefault();
-        const src = JSON.parse(e.dataTransfer.getData("application/json"));
-        const dst = JSON.parse(decodeURIComponent(el.dataset.cell));
-        await postJson("/api/warehouse/save", {
-          zone: dst.zone,
-          column_no: dst.column_no,
-          position: dst.position,
-          slot_no: dst.slot_no,
-          customer_name: src.customer_name || "",
-          product: src.product || "",
-          qty: src.qty || 0,
-          note: src.note || ""
-        });
-        toast("已拖曳移動");
-        await renderWarehouse();
-      });
-    });
-  }
-
-  async function openWarehouseEditor(data){
-    const suggestions = (state.customers || []).map(c => c.name);
-    const existingProducts = (state.inventory || []).map(i => i.product);
-    const html = `
-      <div class="modal-card modal-wide" style="display:block">
-        <button class="modal-close" data-close="#editModal">×</button>
-        <h3>格位編輯</h3>
-        <div class="muted">${escapeHtml(data.zone)}區 / 第${data.column_no}欄 / ${data.position === 'front' ? '前' : '後'} / ${data.slot_no}</div>
-        <div class="grid cols-2" style="margin-top:12px">
-          <div>
-            <label>客戶名稱</label>
-            <input id="whCustomer" placeholder="打關鍵字搜尋完整客戶名">
-            <div id="whCustomerSuggest" class="chips" style="margin-top:10px"></div>
-          </div>
-          <div>
-            <label>商品</label>
-            <input id="whProduct" placeholder="例如 113*12*05=122*3">
-            <div id="whProductSuggest" class="chips" style="margin-top:10px"></div>
-          </div>
-        </div>
-        <div class="grid cols-2">
-          <div>
-            <label>數量</label>
-            <input id="whQty" type="number" value="1">
-          </div>
-          <div>
-            <label>備註</label>
-            <input id="whNote" placeholder="可留空">
-          </div>
-        </div>
-        <div class="inline-actions" style="margin-top:14px">
-          <button class="btn primary" id="whSaveBtn">儲存格位</button>
-          <button class="btn secondary" id="whClearBtn">清除格位</button>
-        </div>
-        <div class="hr"></div>
-        <div class="muted small">已錄入商品可下拉選擇；輸入 113 會直接顯示相關商品。</div>
       </div>
     `;
-    $("#editModalContent").innerHTML = html;
-    openModal("#editModal");
-    const cust = $("#whCustomer");
-    const prod = $("#whProduct");
-    const qty = $("#whQty");
-    const note = $("#whNote");
-    const suggestCust = $("#whCustomerSuggest");
-    const suggestProd = $("#whProductSuggest");
+    root.innerHTML = html;
+  },
 
-    cust.addEventListener("input", async () => {
-      const q = cust.value.trim();
-      if(!q){ suggestCust.innerHTML = ""; return; }
-      const data = await api(`/api/customers/suggest?q=${encodeURIComponent(q)}`);
-      suggestCust.innerHTML = (data.customers || []).map(c => `<button class="chip" data-name="${escapeHtml(c.name)}">${escapeHtml(c.name)}</button>`).join("");
-    });
-    suggestCust.addEventListener("click", e => {
-      const btn = e.target.closest("button[data-name]");
-      if(!btn) return;
-      cust.value = btn.dataset.name;
-      suggestCust.innerHTML = "";
-    });
-
-    prod.addEventListener("input", async () => {
-      const q = prod.value.trim();
-      if(!q){ suggestProd.innerHTML = ""; return; }
-      const data = await api("/api/inventory");
-      const products = (data.items || []).filter(i => [i.product, i.location].join(" ").includes(q)).slice(0, 20);
-      suggestProd.innerHTML = products.map(p => `<button class="chip" data-product="${escapeHtml(p.product)}">${escapeHtml(p.product)} <span class="badge">${p.quantity || 0}</span></button>`).join("") || '<div class="muted">沒有可加入的商品</div>';
-    });
-    suggestProd.addEventListener("click", e => {
-      const btn = e.target.closest("button[data-product]");
-      if(!btn) return;
-      prod.value = btn.dataset.product;
-      suggestProd.innerHTML = "";
-    });
-
-    $("#whSaveBtn").addEventListener("click", async () => {
-      await postJson("/api/warehouse/save", {
-        zone: data.zone,
-        column_no: data.column_no,
-        position: data.position,
-        slot_no: data.slot_no,
-        customer_name: cust.value.trim(),
-        product: prod.value.trim(),
-        qty: Number(qty.value || 1),
-        note: note.value.trim()
-      });
-      toast("已儲存");
-      closeModal("#editModal");
-      await renderWarehouse();
-    });
-    $("#whClearBtn").addEventListener("click", async () => {
-      await postJson("/api/warehouse/delete", {id: data.id || null});
-      toast("已清除");
-      closeModal("#editModal");
-      await renderWarehouse();
-    });
-  }
-
-  async function renderCustomers(){
-    const root = $("#moduleRoot");
-    root.innerHTML = `
-      <section class="section">
-        <div class="top-bar">
-          <div>
-            <h3>客戶資料</h3>
-            <div class="muted">沒有新增按鈕，客戶會由訂單 / 總單 / 庫存自動同步進來。</div>
-          </div>
-        </div>
-        <div id="customersRoot">載入中...</div>
-      </section>
+  renderSlot(zone, bandNo, rowLabel, cellNo, slot) {
+    const empty = !slot;
+    const classes = ['slot', empty ? 'empty' : '', slot && !slot.product ? 'unplaced' : ''].join(' ').trim();
+    const slotKey = `${zone}-${bandNo}-${rowLabel}-${cellNo}`;
+    return `
+      <div class="${classes}" data-zone="${zone}" data-band="${bandNo}" data-row="${rowLabel}" data-cell="${cellNo}"
+           draggable="true"
+           ondragstart="App.dragStart(event)"
+           ondragover="App.dragOver(event)"
+           ondrop="App.dropCell(event)"
+           onclick="App.openCellEditor('${zone}', ${bandNo}, '${rowLabel}', ${cellNo})">
+        <div class="slot-key">${slotKey}</div>
+        ${App.slotLabel(slot)}
+      </div>
     `;
+  },
 
-    const load = async () => {
-      const data = await api("/api/customers");
-      state.customers = data.customers || [];
-      const groups = {北區: [], 中區: [], 南區: [], 未分類: []};
-      (state.customers || []).forEach(c => {
-        (groups[c.zone || "未分類"] || groups["未分類"]).push(c);
-      });
-      $("#customersRoot").innerHTML = Object.entries(groups).map(([zone, list]) => `
-        <div class="zone-group">
-          <div class="zone-head">
-            <h4>${zone}</h4>
-            <div class="badge">${list.length}</div>
-          </div>
-          <div class="chips">
-            ${list.map(c => `<button class="chip" data-edit-customer="${c.id}">${escapeHtml(c.name)}</button>`).join("") || '<div class="muted">尚無客戶</div>'}
-          </div>
-        </div>
-      `).join("");
+  dragStart(ev) {
+    const el = ev.currentTarget;
+    ev.dataTransfer.setData('text/plain', JSON.stringify({
+      zone: el.dataset.zone,
+      band: el.dataset.band,
+      row: el.dataset.row,
+      cell: el.dataset.cell
+    }));
+  },
+
+  dragOver(ev) {
+    ev.preventDefault();
+    ev.currentTarget.classList.add('dragover');
+  },
+
+  async dropCell(ev) {
+    ev.preventDefault();
+    const target = ev.currentTarget;
+    target.classList.remove('dragover');
+    try {
+      const source = JSON.parse(ev.dataTransfer.getData('text/plain'));
+      const srcData = await App.getSlot(source.zone, source.band, source.row, source.cell);
+      const tgtData = await App.getSlot(target.dataset.zone, target.dataset.band, target.dataset.row, target.dataset.cell);
+      await App.saveSlot(target.dataset.zone, target.dataset.band, target.dataset.row, target.dataset.cell, srcData);
+      await App.saveSlot(source.zone, source.band, source.row, source.cell, tgtData);
+      App.toast('已移動', '格位拖曳完成', 'good');
+      await App.loadWarehouse();
+    } catch (e) {
+      App.toast('拖曳失敗', e.message, 'bad');
+    }
+  },
+
+  async getSlot(zone, band, row, cell) {
+    const data = await App.fetchJSON(`/api/warehouse?zone=${zone}`);
+    const bands = data.bands || [];
+    const bandObj = bands.find(x => String(x.band_no) === String(band));
+    const arr = bandObj ? (row === 'front' ? bandObj.front : bandObj.back) : [];
+    return arr[Number(cell)-1] || null;
+  },
+
+  async saveSlot(zone, band, row, cell, slot) {
+    const payload = {
+      zone, band_no: Number(band), row_label: row, cell_no: Number(cell),
+      customer_name: slot?.customer_name || '',
+      product: slot?.product || '',
+      quantity: slot?.quantity || 0,
+      note: slot?.note || '',
     };
+    await App.fetchJSON('/api/warehouse', { method: 'POST', body: JSON.stringify(payload) });
+  },
 
-    $("#customersRoot").addEventListener("click", async (e) => {
-      const btn = e.target.closest("[data-edit-customer]");
-      if(!btn) return;
-      const id = btn.getAttribute("data-edit-customer");
-      const data = await api("/api/customers");
-      const c = (data.customers || []).find(x => String(x.id) === String(id));
-      if(!c) return;
-      const html = `
-        <h3>編輯客戶</h3>
-        <div class="grid cols-2">
-          <div><label>客戶名稱</label><input id="custName" value="${escapeHtml(c.name)}"></div>
-          <div><label>區域</label><select id="custZone"><option ${c.zone==="北區"?"selected":""}>北區</option><option ${c.zone==="中區"?"selected":""}>中區</option><option ${c.zone==="南區"?"selected":""}>南區</option><option ${c.zone==="未分類"?"selected":""}>未分類</option></select></div>
-        </div>
-        <div class="grid cols-2">
-          <div><label>電話</label><input id="custPhone" value="${escapeHtml(c.phone || "")}"></div>
-          <div><label>地址</label><input id="custAddr" value="${escapeHtml(c.address || "")}"></div>
-        </div>
-        <label>特殊要求</label>
-        <textarea id="custNote">${escapeHtml(c.note || "")}</textarea>
-        <div class="inline-actions" style="margin-top:14px">
-          <button class="btn primary" id="custSaveBtn">儲存</button>
-        </div>
-      `;
-      $("#editModalContent").innerHTML = html;
-      openModal("#editModal");
-      $("#custSaveBtn").addEventListener("click", async () => {
-        await postJson(`/api/customers/${id}`, {
-          name: $("#custName").value.trim(),
-          zone: $("#custZone").value,
-          phone: $("#custPhone").value.trim(),
-          address: $("#custAddr").value.trim(),
-          note: $("#custNote").value.trim(),
-        });
-        toast("已更新客戶");
-        closeModal("#editModal");
-        await load();
-      });
-    });
-
-    await load();
-    setInterval(load, 12000);
-  }
-
-  async function renderTodayChanges(){
-    const root = $("#moduleRoot");
-    root.innerHTML = `
-      <section class="section">
-        <div class="top-bar">
+  async openCellEditor(zone, band, row, cell) {
+    try {
+      const info = await App.fetchJSON(`/api/warehouse?zone=${zone}`);
+      const bands = info.bands || [];
+      const bandObj = bands.find(x => String(x.band_no) === String(band));
+      const slot = bandObj ? (row === 'front' ? bandObj.front[cell-1] : bandObj.back[cell-1]) : null;
+      const suggestions = await App.fetchJSON('/api/warehouse/slots?zone=' + zone + '&band_no=' + band + '&row_label=' + row + '&cell_no=' + cell);
+      const allNames = (App.state.customers || []).map(c => c.customer_name).filter(Boolean);
+      App.openModal(`編輯格位 ${zone}-${band}-${row}-${cell}`, `
+        <div class="modal-grid">
           <div>
-            <h3>今日異動</h3>
-            <div class="muted">新增、出貨、未上架、異常一目了然。</div>
-          </div>
-          <div class="inline-actions">
-            <button class="btn primary" id="refreshToday">重新整理</button>
-          </div>
-        </div>
-        <div id="todayRoot">載入中...</div>
-      </section>
-    `;
-    const load = async () => {
-      const data = await api("/api/today_changes");
-      const s = data.summary || {};
-      const logs = data.logs || [];
-      const notifications = data.notifications || [];
-      $("#todayRoot").innerHTML = `
-        <section class="summary-grid" style="margin-top:0">
-          <div class="summary-card"><span>今日新增</span><strong>${s.new_count || 0}</strong></div>
-          <div class="summary-card"><span>今日出貨量</span><strong>${s.ship_count || 0}</strong></div>
-          <div class="summary-card"><span>未上架商品</span><strong>${s.unplaced_count || 0}</strong></div>
-          <div class="summary-card"><span>異常紀錄</span><strong>${s.anomaly_count || 0}</strong></div>
-        </section>
-        <div class="hr"></div>
-        <h4>通知列表</h4>
-        <div class="detail-list">
-          ${notifications.map(n => `
-            <div class="detail-item">
-              <div><strong>${escapeHtml(n.username || "系統")}</strong>｜${escapeHtml(n.message || "")}</div>
-              <div class="meta">${escapeHtml(n.created_at || "")}｜${escapeHtml(n.kind || "")}</div>
+            <div class="label">客戶名稱（輸入關鍵字直接跳出完整名稱）</div>
+            <div class="autocomplete">
+              <input class="input" id="slotCustomer" value="${slot?.customer_name || ''}" oninput="App.searchSlotCustomers(this.value)">
+              <div id="slotCustomerSug" class="suggestions"></div>
             </div>
-          `).join("") || '<div class="muted">沒有通知</div>'}
-        </div>
-        <div class="hr"></div>
-        <h4>操作歷史</h4>
-        <div class="detail-list">
-          ${logs.map(log => `
-            <div class="detail-item">
-              <div><strong>${escapeHtml(log.username || "")}</strong>｜${escapeHtml(log.action || "")}</div>
-              <div class="meta">${escapeHtml(log.created_at || "")}｜${escapeHtml(log.target_type || "")} ${escapeHtml(log.target_name || "")}</div>
+            <div style="height:10px"></div>
+            <div class="label">商品</div>
+            <input class="input" id="slotProduct" value="${slot?.product || ''}" placeholder="可搜尋：113">
+            <div style="height:10px"></div>
+            <div class="label">數量</div>
+            <input class="input" id="slotQty" type="number" value="${slot?.quantity || 0}">
+            <div style="height:10px"></div>
+            <div class="label">備註</div>
+            <textarea id="slotNote">${slot?.note || ''}</textarea>
+          </div>
+          <div>
+            <div class="label">已錄入下拉選項（可直接添加）</div>
+            <select id="slotPreset" onchange="App.applyPreset(this.value)">
+              <option value="">--選擇已錄入項目--</option>
+              ${(suggestions.suggestions || []).map(s => `<option value="${s.product}|${s.customer_name}|${s.quantity}">${s.product} ｜ ${s.customer_name || ''} ｜ ${s.quantity || 0}</option>`).join('')}
+            </select>
+            <div style="height:10px"></div>
+            <div class="label">搜尋商品</div>
+            <input class="input" id="slotSearch" placeholder="輸入 113 即可篩選" oninput="App.filterSlotSuggestions(this.value)">
+            <div style="height:10px"></div>
+            <div id="slotSuggestionList" class="list" style="max-height:320px;overflow:auto">
+              ${(suggestions.suggestions || []).map(s => `
+                <div class="list-item clickable" onclick="App.fillSlotFromSuggestion(${JSON.stringify(s)})">
+                  <div class="meta">
+                    <div class="title">${s.product || ''}</div>
+                    <div class="desc">${s.customer_name || ''} ｜ ${s.quantity || 0}</div>
+                  </div>
+                  <div class="small">點選添加</div>
+                </div>
+              `).join('')}
             </div>
-          `).join("") || '<div class="muted">沒有操作紀錄</div>'}
+          </div>
         </div>
-      `;
-    };
-    $("#refreshToday").addEventListener("click", load);
-    await load();
-    setInterval(load, 10000);
-  }
-
-  // init
-  document.addEventListener("DOMContentLoaded", async () => {
-    wireCommon();
-
-    if(window.APP_BOOT?.page === "home"){
-      renderHomeExtras();
+        <div class="modal-actions">
+          <button class="ghost" onclick="App.clearSlot('${zone}', ${band}, '${row}', ${cell})">清空</button>
+          <button class="primary" onclick="App.saveOpenSlot('${zone}', ${band}, '${row}', ${cell})">儲存</button>
+        </div>
+      `);
+      App.state.currentCell = { zone, band, row, cell };
+    } catch (e) {
+      App.toast('開啟格位失敗', e.message, 'bad');
     }
+  },
 
-    if(window.APP_BOOT?.page === "module"){
-      await initModule();
+  searchSlotCustomers(q) {
+    const box = document.getElementById('slotCustomerSug');
+    const query = (q || '').trim();
+    if (!box) return;
+    const matches = (App.state.customers || []).map(c => c.customer_name || '').filter(name => name.includes(query) || query.split('').every(ch => name.includes(ch))).slice(0, 12);
+    box.innerHTML = matches.map(name => `<div class="suggestion" onclick="document.getElementById('slotCustomer').value=${JSON.stringify(name)};document.getElementById('slotCustomerSug').style.display='none'">${name}</div>`).join('');
+    box.style.display = matches.length ? 'block' : 'none';
+  },
+
+  filterSlotSuggestions(q) {
+    const query = (q || '').trim();
+    document.querySelectorAll('#slotSuggestionList .list-item').forEach(el => {
+      el.style.display = !query || el.innerText.includes(query) ? '' : 'none';
+    });
+  },
+
+  fillSlotFromSuggestion(s) {
+    document.getElementById('slotProduct').value = s.product || '';
+    document.getElementById('slotCustomer').value = s.customer_name || '';
+    document.getElementById('slotQty').value = s.quantity || 0;
+  },
+
+  applyPreset(val) {
+    if (!val) return;
+    const [product, customer, qty] = val.split('|');
+    document.getElementById('slotProduct').value = product || '';
+    document.getElementById('slotCustomer').value = customer || '';
+    document.getElementById('slotQty').value = qty || 0;
+  },
+
+  async saveOpenSlot(zone, band, row, cell) {
+    try {
+      await App.fetchJSON('/api/warehouse', {
+        method: 'POST',
+        body: JSON.stringify({
+          zone,
+          band_no: band,
+          row_label: row,
+          cell_no: cell,
+          customer_name: document.getElementById('slotCustomer').value.trim(),
+          product: document.getElementById('slotProduct').value.trim(),
+          quantity: Number(document.getElementById('slotQty').value || 0),
+          note: document.getElementById('slotNote').value.trim()
+        })
+      });
+      App.toast('已儲存', '倉庫格位更新完成', 'good');
+      App.closeModal();
+      await App.loadWarehouse();
+    } catch (e) {
+      App.toast('儲存失敗', e.message, 'bad');
     }
+  },
 
-    // login page logic
-    const loginForm = $("#loginForm");
-    if(loginForm){
-      const username = $("#username");
-      const password = $("#password");
-      const error = $("#loginError");
-      const savedUser = localStorage.getItem("username");
-      const savedPass = localStorage.getItem("password");
-      if(savedUser) username.value = savedUser;
-      if(savedPass) password.value = savedPass;
-      loginForm.addEventListener("submit", async (e) => {
-        e.preventDefault();
-        error.textContent = "";
-        try{
-          const res = await postJson("/api/login", {username: username.value.trim(), password: password.value.trim()});
-          localStorage.setItem("username", username.value.trim());
-          localStorage.setItem("password", password.value.trim());
-          window.location.href = res.redirect || "/";
-        }catch(err){
-          error.textContent = err.message;
+  async clearSlot(zone, band, row, cell) {
+    try {
+      document.getElementById('slotCustomer').value = '';
+      document.getElementById('slotProduct').value = '';
+      document.getElementById('slotQty').value = 0;
+      document.getElementById('slotNote').value = '';
+      await App.saveOpenSlot(zone, band, row, cell);
+    } catch (e) {
+      App.toast('清空失敗', e.message, 'bad');
+    }
+  },
+
+  async loadWarehouse() {
+    if (!document.getElementById('zoneA')) return;
+    try {
+      const a = await App.fetchJSON('/api/warehouse?zone=A');
+      const b = await App.fetchJSON('/api/warehouse?zone=B');
+      App.state.warehouseA = a.bands || [];
+      App.state.warehouseB = b.bands || [];
+      App.renderWarehouse('A', App.state.warehouseA);
+      App.renderWarehouse('B', App.state.warehouseB);
+      App.showZone(App.state.activeZone || 'A');
+      App.renderUnplacedList();
+    } catch (e) {
+      console.error(e);
+    }
+  },
+
+  renderUnplacedList() {
+    const el = document.getElementById('unplacedList');
+    if (!el) return;
+    const items = (App.state.summary?.unplaced_items || []);
+    el.innerHTML = items.map(i => `
+      <div class="list-item">
+        <div class="meta">
+          <div class="title red">${i.product || ''}</div>
+          <div class="desc">${(i.locations || []).join(', ') || '未上架'} ｜ ${i.quantity || 0}</div>
+        </div>
+        <div class="small red">紅字</div>
+      </div>
+    `).join('') || '<div class="center-note">沒有未上架商品</div>';
+  },
+
+  async poll() {
+    try {
+      const s = await App.fetchJSON('/api/summary');
+      App.state.summary = s.summary || {};
+      const badge = document.getElementById('todayBadge');
+      if (badge) badge.innerText = App.state.summary.unread_notifications || 0;
+      const notes = await App.fetchJSON('/api/notifications/latest?since_id=' + App.state.lastNotifId);
+      const newItems = notes.items || [];
+      if (newItems.length) {
+        App.state.lastNotifId = newItems[newItems.length-1].id || App.state.lastNotifId;
+        newItems.forEach(n => App.toast(n.title || '通知', n.message || '', 'good'));
+      }
+      if (App.state.module === 'today') {
+        await App.loadToday();
+      }
+      if (App.state.module === 'warehouse') await App.loadWarehouse();
+      if (App.state.module === 'inventory') { await App.loadInventory(); }
+      if (App.state.module === 'customers') await App.loadCustomers();
+    } catch (e) {}
+  },
+
+  async markNotificationsRead() {
+    try {
+      await App.fetchJSON('/api/notifications/read', { method:'POST', body: JSON.stringify({}) });
+      const badge = document.getElementById('todayBadge');
+      if (badge) badge.innerText = '0';
+      await App.loadToday();
+    } catch (e) {}
+  },
+
+  async loadToday() {
+    try {
+      const data = await App.fetchJSON('/api/today_changes');
+      App.state.notifications = data.notifications || [];
+      App.state.logs = data.logs || [];
+      App.state.discrepancies = data.discrepancies || [];
+      App.state.summary = data.summary || {};
+      App.renderSummaryCards();
+      App.renderNotifications();
+      App.renderUnplacedList();
+    } catch (e) {}
+  },
+
+  async loadInventory() {
+    try {
+      const data = await App.fetchJSON('/api/inventory');
+      App.state.inventory = data.items || [];
+      App.renderInventory();
+    } catch (e) {}
+  },
+
+  initModule() {
+    if (App.state.module === 'inventory') App.renderInventory();
+    if (App.state.module === 'orders') App.renderOrders();
+    if (App.state.module === 'master_orders') App.renderMasters();
+    if (App.state.module === 'shipping_records') App.loadShippingRecords();
+    if (App.state.module === 'customers') App.loadCustomers();
+    if (['orders','master_orders','shipping'].includes(App.state.module)) App.renderCustomerChips(App.state.module);
+    if (App.state.module === 'warehouse') App.loadWarehouse();
+    if (App.state.module === 'today') App.loadToday();
+    if (App.state.module === 'settings') App.renderNotifications();
+    if (App.state.module === 'reconcile') App.renderNotifications();
+    App.renderSummaryCards();
+    App.renderNotifications();
+    App.renderUnplacedList();
+    App.applyNotificationCount();
+  },
+
+  applyNotificationCount() {
+    const badge = document.getElementById('todayBadge');
+    if (badge) badge.innerText = App.state.summary?.unread_notifications || window.APP_CONFIG.unreadCount || 0;
+  },
+
+  attachCameraButton() {
+    const module = App.state.module;
+    if (!['inventory','orders','master_orders','shipping'].includes(module)) return;
+    if (document.getElementById('floatingCameraBtn')) return;
+    const btn = document.createElement('button');
+    btn.id = 'floatingCameraBtn';
+    btn.className = 'icon-btn camera';
+    btn.innerHTML = '📷';
+    btn.title = '拍照 / 上傳';
+    btn.onclick = () => App.triggerFileByCurrentModule();
+    document.body.appendChild(btn);
+  },
+
+  triggerFileByCurrentModule() {
+    if (!App.state.module) return;
+    App.triggerCamera(App.state.module);
+  },
+
+  parseRoute() {
+    return App.state.module;
+  },
+
+
+  async searchWarehouse() {
+    const query = (document.getElementById('warehouseSearch')?.value || '').trim();
+    if (!query) {
+      App.toast('請輸入關鍵字', '', 'warn');
+      return;
+    }
+    try {
+      const a = await App.fetchJSON('/api/warehouse?zone=A');
+      const b = await App.fetchJSON('/api/warehouse?zone=B');
+      const all = [...(a.bands || []), ...(b.bands || [])];
+      let hit = null;
+      for (const band of all) {
+        for (const rowLabel of ['front','back']) {
+          const arr = rowLabel === 'front' ? band.front : band.back;
+          for (let i = 0; i < arr.length; i++) {
+            const slot = arr[i];
+            if (!slot) continue;
+            const text = `${slot.customer_name || ''} ${slot.product || ''} ${slot.slot_key || ''}`;
+            if (text.includes(query)) {
+              hit = { zone: slot.zone, band: slot.band_no, row: slot.row_label, cell: slot.cell_no };
+              break;
+            }
+          }
+          if (hit) break;
         }
-      });
+        if (hit) break;
+      }
+      if (hit) {
+        App.showZone(hit.zone || 'A');
+        App.toast('找到格位', `${hit.zone}-${hit.band}-${hit.row}-${hit.cell}`, 'good');
+        App.openCellEditor(hit.zone, hit.band, hit.row, hit.cell);
+      } else {
+        App.toast('找不到', query, 'warn');
+      }
+    } catch (e) {
+      App.toast('搜尋失敗', e.message, 'bad');
     }
+  },
 
-    // Home badge click / notifications
-    if(window.APP_BOOT?.page === "home"){
-      const badge = Number(window.APP_BOOT.badge || 0);
-      refreshBadge(badge);
-    }
-  });
+  init() {
+    if (!window.APP_CONFIG || !window.APP_CONFIG.user) return;
+    App.initModule();
+    App.attachCameraButton();
+    setInterval(() => App.poll(), 5000);
+    setTimeout(() => App.poll(), 1200);
+  }
+};
 
-  window.addEventListener("beforeinstallprompt", (e) => {
-    e.preventDefault();
-    window.deferredPrompt = e;
-  });
-
-  if("serviceWorker" in navigator){
-    window.addEventListener("load", () => {
-      navigator.serviceWorker.register("/static/service-worker.js").catch(() => {});
+document.addEventListener('DOMContentLoaded', () => {
+  App.init();
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/service-worker.js').catch(() => {});
     });
   }
-})();
+});
