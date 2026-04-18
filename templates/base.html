@@ -1,24 +1,32 @@
-
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ title or '沅興木業' }}</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-  <script defer src="{{ url_for('static', filename='app.js') }}"></script>
-  <meta name="theme-color" content="#d6bf8f">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="mobile-web-app-capable" content="yes">
-  <link rel="manifest" href="{{ url_for('manifest_webmanifest') }}">
-  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/apple-touch-icon.png') }}">
-  <link rel="icon" type="image/png" sizes="192x192" href="{{ url_for('static', filename='icons/icon-192.png') }}">
-  <link rel="icon" type="image/png" sizes="512x512" href="{{ url_for('static', filename='icons/icon-512.png') }}">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>沅興木業</title>
+
+  <!-- ✅ 修正這裡 -->
+  <link rel="manifest" href="/static/manifest.webmanifest">
+
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <link rel="icon" href="{{ url_for('static', filename='wood-icon.svg') }}">
+
 </head>
-<body>
-  <div class="page-shell">
-    {% block body %}{% endblock %}
-  </div>
+
+<body class="page-enter">
+
+<div class="page-shell">
+  {% block content %}{% endblock %}
+</div>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+<script src="{{ url_for('static', filename='main.js') }}"></script>
+
+<script>
+  // 頁面進場動畫（保留你UI效果）
+  document.body.classList.add("page-enter-active");
+</script>
+
 </body>
 </html>
