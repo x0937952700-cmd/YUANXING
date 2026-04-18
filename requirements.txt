@@ -6,6 +6,5 @@ opencv-python
 numpy
 google-cloud-vision
 psycopg2-binary
-
 Flask-SocketIO
 eventlet
