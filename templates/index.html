@@ -3,112 +3,79 @@
 <head>
 <meta name="viewport" content="width=device-width">
 <style>
-body{font-family:Arial;text-align:center;background:#eee;}
-.cell{
- width:60px;height:60px;border:1px solid #aaa;
- display:inline-block;margin:2px;
- background:#fff;
-}
-.drag{
- background:#6fa8dc;color:#fff;
-}
+body{font-family:Arial;background:#eee;text-align:center;}
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:4px;}
+.cell{height:50px;background:#fff;border:1px solid #aaa;}
+.drag{background:#6fa8dc;color:#fff;}
 </style>
 </head>
 
 <body>
 
-<h2>沅興木業（賺錢版）</h2>
+<h2>沅興木業 最終版</h2>
 
-<!-- OCR -->
-<div>
-<input id="ocr" placeholder="OCR文字">
-<button onclick="applyOCR()">套用學習</button>
-<button onclick="learnOCR()">學習</button>
-</div>
+<input id="ocr">
+<button onclick="applyOCR()">OCR修正</button>
 
-<!-- 入庫 -->
-<div>
-<input id="p" placeholder="商品">
-<input id="q" placeholder="數量">
+<br><br>
+
+<input id="p"><input id="q">
 <button onclick="add()">入庫</button>
-</div>
 
-<!-- 倉庫 -->
-<div id="warehouse"></div>
+<h3>倉庫</h3>
+<div id="w" class="grid"></div>
 
 <script>
 
-let dragItem="";
+let dragItem=""
 
-/* OCR學習 */
-function learnOCR(){
- let w=prompt("錯誤")
- let c=prompt("正確")
-
- fetch("/api/ocr_learn",{
-  method:"POST",
-  headers:{"Content-Type":"application/json"},
-  body:JSON.stringify({w:w,c:c})
- })
-}
-
-/* OCR套用 */
 function applyOCR(){
  fetch("/api/ocr_apply?t="+ocr.value)
  .then(r=>r.json())
  .then(d=>ocr.value=d.text)
 }
 
-/* 入庫 */
 function add(){
- fetch("/api/add",{
-  method:"POST",
-  headers:{"Content-Type":"application/json"},
-  body:JSON.stringify({p:p.value,q:Number(q.value)})
- })
+ fetch("/api/add",{method:"POST",
+ headers:{"Content-Type":"application/json"},
+ body:JSON.stringify({p:p.value,q:Number(q.value)})})
 }
 
-/* 建倉庫 */
 function build(){
- let w=document.getElementById("warehouse");
- w.innerHTML="";
+ let w=document.getElementById("w")
+ w.innerHTML=""
 
- for(let i=0;i<30;i++){
-  let d=document.createElement("div");
-  d.className="cell";
-  d.dataset.loc="L"+i;
+ for(let i=0;i<120;i++){
+  let c=document.createElement("div")
+  c.className="cell"
+  c.dataset.loc="L"+i
 
-  d.ondrop=(e)=>{
+  c.ondrop=(e)=>{
     e.preventDefault()
-    fetch("/api/move",{
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({p:dragItem,loc:d.dataset.loc})
-    })
+    fetch("/api/move",{method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({p:dragItem,loc:c.dataset.loc})})
   }
 
-  d.ondragover=(e)=>e.preventDefault()
-
-  w.appendChild(d)
+  c.ondragover=(e)=>e.preventDefault()
+  w.appendChild(c)
  }
 }
 
-/* 載入 */
 function load(){
  fetch("/api/warehouse")
  .then(r=>r.json())
  .then(d=>{
   document.querySelectorAll(".cell").forEach(c=>c.innerHTML="")
-
   d.forEach(i=>{
     if(i.l){
       let cell=[...document.querySelectorAll(".cell")]
-        .find(c=>c.dataset.loc===i.l)
+      .find(c=>c.dataset.loc===i.l)
 
       if(cell){
         cell.innerHTML=`<div draggable="true"
-          ondragstart="dragItem='${i.p}'"
-          class="drag">${i.p}<br>${i.q}</div>`
+        ondragstart="dragItem='${i.p}'"
+        class="drag">${i.p}<br>${i.q}</div>`
       }
     }
   })
@@ -117,6 +84,7 @@ function load(){
 
 setInterval(load,2000)
 build()
+
 </script>
 
 </body>
