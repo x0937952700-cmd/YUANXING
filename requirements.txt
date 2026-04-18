@@ -1,3 +1,7 @@
 Flask
-Flask-SocketIO
 gunicorn
+paddleocr
+paddlepaddle
+opencv-python
+numpy
+google-cloud-vision
