@@ -1,0 +1,56 @@
+
+<link rel="stylesheet" href="/static/style.css">
+<h1>倉庫圖</h1>
+
+<input placeholder="搜尋" oninput="search(this.value)">
+
+{% for zone in ['A','B'] %}
+<h2>{{zone}}區</h2>
+{% for row in range(1,7) %}
+<div class="grid">
+{% for col in range(1,11) %}
+<div class="cell"
+ondrop="drop(event,'{{zone}}{{row}}F{{col}}')"
+ondragover="allowDrop(event)">
+{{zone}}{{row}}F{{col}}
+</div>
+{% endfor %}
+</div>
+{% endfor %}
+{% endfor %}
+
+<ul>
+{% for k,v in warehouse.items() %}
+<li draggable="true" ondragstart="drag(event)" id="{{k}}">{{k}} : {{v}}</li>
+{% endfor %}
+</ul>
+
+<script>
+function allowDrop(ev){ev.preventDefault();}
+
+function drag(ev){
+ ev.dataTransfer.setData("text", ev.target.innerText);
+}
+
+function drop(ev,slot){
+ ev.preventDefault();
+ let item = ev.dataTransfer.getData("text");
+ fetch("/place",{method:"POST",
+ headers:{'Content-Type':'application/x-www-form-urlencoded'},
+ body:`slot=${slot}&item=${item}`})
+ .then(()=>location.reload());
+}
+
+function search(q){
+ fetch("/search?q="+q)
+ .then(r=>r.json())
+ .then(data=>{
+ document.querySelectorAll(".cell").forEach(c=>c.classList.remove("highlight"));
+ Object.keys(data).forEach(k=>{
+ document.querySelectorAll(".cell").forEach(c=>{
+ if(c.innerText==k){c.classList.add("highlight")}
+ })
+ })
+ })
+}
+</script>

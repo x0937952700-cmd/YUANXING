@@ -1,0 +1,21 @@
+
+<link rel="stylesheet" href="/static/style.css">
+<h1>批次入庫</h1>
+<form method="post">
+<textarea name="batch" placeholder="一行一筆"></textarea>
+<button class="btn">新增</button>
+</form>
+
+<ul>
+{% for i in data %}
+<li draggable="true" ondragstart="drag(event)" id="{{i}}">{{i}}</li>
+{% endfor %}
+</ul>
+
+<a href="/warehouse" class="btn">去放貨</a>
+
+<script>
+function drag(ev){
+ ev.dataTransfer.setData("text", ev.target.id);
+}
+</script>

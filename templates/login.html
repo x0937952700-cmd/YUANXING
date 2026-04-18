@@ -1,1 +1,8 @@
-<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>登入</title><link rel="stylesheet" href="/static/styles.css"></head><body class="center-page"><div class="card login-card"><h1>沅興木業</h1><input id="username" placeholder="帳號"><input id="password" type="password" placeholder="密碼"><button onclick="login()">登入</button><p id="msg"></p></div><script>async function login(){const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:username.value,password:password.value})});const j=await r.json();if(j.success)location='/';else msg.textContent=j.error||'登入失敗';}</script></body></html>
+
+<link rel="stylesheet" href="/static/style.css">
+<h1>登入</h1>
+<form method="post">
+<input name="user"><br><br>
+<input name="pass"><br><br>
+<button class="btn">登入</button>
+</form>
