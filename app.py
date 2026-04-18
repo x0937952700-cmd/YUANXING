@@ -24,8 +24,7 @@ def init_db():
 
     c.execute("""
     CREATE TABLE IF NOT EXISTS inventory(
-        id SERIAL PRIMARY KEY,
-        product TEXT,
+        product TEXT PRIMARY KEY,
         qty INT,
         location TEXT,
         customer TEXT
@@ -41,7 +40,6 @@ def init_db():
     )
     """)
 
-    # 管理員
     c.execute("""
     INSERT INTO users (username,password,role)
     VALUES ('陳韋廷','1234','admin')
@@ -53,7 +51,6 @@ def init_db():
 
 init_db()
 
-# ===== 首頁 =====
 @app.route("/")
 def home():
     return render_template("index.html")
@@ -61,13 +58,15 @@ def home():
 # ===== 登入 =====
 @app.route("/api/login", methods=["POST"])
 def login():
-    d=request.json
-    conn=get_conn();c=conn.cursor()
+    d = request.json
+    conn = get_conn()
+    c = conn.cursor()
+
     c.execute("SELECT password,role,is_blocked FROM users WHERE username=%s",(d["u"],))
-    r=c.fetchone()
+    r = c.fetchone()
 
     if r:
-        if r[2]: return jsonify({"error":"被封鎖"})
+        if r[2]: return jsonify({"error":"封鎖"})
         if r[0]!=d["p"]: return jsonify({"error":"錯誤"})
         return jsonify({"ok":1,"role":r[1]})
     else:
@@ -75,14 +74,22 @@ def login():
         conn.commit()
         return jsonify({"ok":1,"role":"user"})
 
-# ===== 入庫 =====
-@app.route("/api/add",methods=["POST"])
+# ===== 入庫（合併庫存）=====
+@app.route("/api/add", methods=["POST"])
 def add():
-    d=request.json
-    conn=get_conn();c=conn.cursor()
+    d = request.json
+    conn = get_conn()
+    c = conn.cursor()
 
-    c.execute("INSERT INTO inventory(product,qty,customer) VALUES(%s,%s,%s)",
-              (d["p"],d["q"],d["c"]))
+    # 有就累加
+    c.execute("SELECT qty FROM inventory WHERE product=%s",(d["p"],))
+    r = c.fetchone()
+
+    if r:
+        c.execute("UPDATE inventory SET qty=qty+%s WHERE product=%s",(d["q"],d["p"]))
+    else:
+        c.execute("INSERT INTO inventory(product,qty,location,customer) VALUES(%s,%s,%s,%s)",
+                  (d["p"],d["q"],d.get("loc",""),d.get("c","")))
 
     c.execute("INSERT INTO logs(action,user_name,time) VALUES(%s,%s,%s)",
               ("入庫:"+d["p"],d["user"],str(datetime.datetime.now())))
@@ -90,16 +97,17 @@ def add():
     conn.commit()
     return jsonify({"ok":1})
 
-# ===== 出貨 =====
-@app.route("/api/ship",methods=["POST"])
+# ===== 出貨（鎖庫存）=====
+@app.route("/api/ship", methods=["POST"])
 def ship():
-    d=request.json
-    conn=get_conn();c=conn.cursor()
+    d = request.json
+    conn = get_conn()
+    c = conn.cursor()
 
-    c.execute("SELECT qty FROM inventory WHERE product=%s",(d["p"],))
-    r=c.fetchone()
+    c.execute("SELECT qty FROM inventory WHERE product=%s FOR UPDATE",(d["p"],))
+    r = c.fetchone()
 
-    if not r or r[0]<d["q"]:
+    if not r or r[0] < d["q"]:
         return jsonify({"error":"庫存不足"})
 
     c.execute("UPDATE inventory SET qty=qty-%s WHERE product=%s",(d["q"],d["p"]))
@@ -113,25 +121,24 @@ def ship():
 # ===== 倉庫 =====
 @app.route("/api/warehouse")
 def warehouse():
-    conn=get_conn();c=conn.cursor()
-    c.execute("SELECT location,product,qty,customer FROM inventory")
-    rows=c.fetchall()
+    conn = get_conn()
+    c = conn.cursor()
 
-    return jsonify([
-        {"location":r[0],"product":r[1],"qty":r[2],"customer":r[3]}
-        for r in rows
-    ])
+    c.execute("SELECT product,qty,location FROM inventory")
+    rows = c.fetchall()
+
+    return jsonify([{"p":r[0],"q":r[1],"l":r[2]} for r in rows])
 
 # ===== logs =====
 @app.route("/api/logs")
 def logs():
-    conn=get_conn();c=conn.cursor()
-    c.execute("SELECT action,user_name,time FROM logs ORDER BY id DESC LIMIT 30")
-    rows=c.fetchall()
+    conn = get_conn()
+    c = conn.cursor()
 
-    return jsonify([
-        {"a":r[0],"u":r[1],"t":r[2]} for r in rows
-    ])
+    c.execute("SELECT action,user_name,time FROM logs ORDER BY id DESC LIMIT 50")
+    rows = c.fetchall()
 
-if __name__=="__main__":
-    app.run(host="0.0.0.0",port=10000)
+    return jsonify([{"a":r[0],"u":r[1],"t":r[2]} for r in rows])
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
