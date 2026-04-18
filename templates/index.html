@@ -3,120 +3,120 @@
 <head>
 <meta name="viewport" content="width=device-width">
 <style>
-body{font-family:Arial;background:#e9e6e1;text-align:center;}
-.title{font-size:28px;margin:20px;}
-.page{display:none;}
-.active{display:block;}
-button{padding:18px;margin:8px;width:85%;border-radius:12px;}
+body{font-family:Arial;text-align:center;background:#eee;}
+.cell{
+ width:60px;height:60px;border:1px solid #aaa;
+ display:inline-block;margin:2px;
+ background:#fff;
+}
+.drag{
+ background:#6fa8dc;color:#fff;
+}
 </style>
 </head>
 
 <body>
 
-<div class="title">沅興木業</div>
+<h2>沅興木業（賺錢版）</h2>
 
-<div id="login" class="page">
-<input id="u" placeholder="姓名"><br>
-<input id="p" placeholder="密碼"><br>
-<button onclick="login()">登入</button>
+<!-- OCR -->
+<div>
+<input id="ocr" placeholder="OCR文字">
+<button onclick="applyOCR()">套用學習</button>
+<button onclick="learnOCR()">學習</button>
 </div>
 
-<div id="home" class="page">
-<button onclick="go('stock')">入庫</button>
-<button onclick="go('ship')">出貨</button>
-<button onclick="go('warehouse')">倉庫</button>
-<button onclick="go('logs')">紀錄</button>
-</div>
-
-<div id="stock" class="page">
-<button onclick="go('home')">返回</button>
-<input id="p1" placeholder="商品">
-<input id="q1" placeholder="數量">
+<!-- 入庫 -->
+<div>
+<input id="p" placeholder="商品">
+<input id="q" placeholder="數量">
 <button onclick="add()">入庫</button>
 </div>
 
-<div id="ship" class="page">
-<button onclick="go('home')">返回</button>
-<input id="p2" placeholder="商品">
-<input id="q2" placeholder="數量">
-<button onclick="ship()">出貨</button>
-</div>
-
-<div id="warehouse" class="page">
-<button onclick="go('home')">返回</button>
-<div id="w"></div>
-</div>
-
-<div id="logs" class="page">
-<button onclick="go('home')">返回</button>
-<ul id="l"></ul>
-</div>
+<!-- 倉庫 -->
+<div id="warehouse"></div>
 
 <script>
-let user = localStorage.getItem("user")
 
-if(user){
-    go("home")
-}else{
-    go("login")
-}
+let dragItem="";
 
-function login(){
- fetch("/api/login",{
+/* OCR學習 */
+function learnOCR(){
+ let w=prompt("錯誤")
+ let c=prompt("正確")
+
+ fetch("/api/ocr_learn",{
   method:"POST",
   headers:{"Content-Type":"application/json"},
-  body:JSON.stringify({u:u.value,p:p.value})
+  body:JSON.stringify({w:w,c:c})
  })
+}
+
+/* OCR套用 */
+function applyOCR(){
+ fetch("/api/ocr_apply?t="+ocr.value)
  .then(r=>r.json())
- .then(d=>{
-  if(d.error){alert(d.error);return}
-  user = u.value
-  localStorage.setItem("user",user)
-  go("home")
- })
+ .then(d=>ocr.value=d.text)
 }
 
-function go(id){
- document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'))
- document.getElementById(id).classList.add('active')
-}
-
+/* 入庫 */
 function add(){
  fetch("/api/add",{
   method:"POST",
   headers:{"Content-Type":"application/json"},
-  body:JSON.stringify({p:p1.value,q:q1.value,user:user})
+  body:JSON.stringify({p:p.value,q:Number(q.value)})
  })
 }
 
-function ship(){
- fetch("/api/ship",{
-  method:"POST",
-  headers:{"Content-Type":"application/json"},
-  body:JSON.stringify({p:p2.value,q:q2.value,user:user})
- })
+/* 建倉庫 */
+function build(){
+ let w=document.getElementById("warehouse");
+ w.innerHTML="";
+
+ for(let i=0;i<30;i++){
+  let d=document.createElement("div");
+  d.className="cell";
+  d.dataset.loc="L"+i;
+
+  d.ondrop=(e)=>{
+    e.preventDefault()
+    fetch("/api/move",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({p:dragItem,loc:d.dataset.loc})
+    })
+  }
+
+  d.ondragover=(e)=>e.preventDefault()
+
+  w.appendChild(d)
+ }
 }
 
-function loadW(){
+/* 載入 */
+function load(){
  fetch("/api/warehouse")
  .then(r=>r.json())
  .then(d=>{
-  w.innerHTML=d.map(i=>`${i.p}(${i.q})`).join("<br>")
+  document.querySelectorAll(".cell").forEach(c=>c.innerHTML="")
+
+  d.forEach(i=>{
+    if(i.l){
+      let cell=[...document.querySelectorAll(".cell")]
+        .find(c=>c.dataset.loc===i.l)
+
+      if(cell){
+        cell.innerHTML=`<div draggable="true"
+          ondragstart="dragItem='${i.p}'"
+          class="drag">${i.p}<br>${i.q}</div>`
+      }
+    }
+  })
  })
 }
 
-function loadLogs(){
- fetch("/api/logs")
- .then(r=>r.json())
- .then(d=>{
-  l.innerHTML=d.map(i=>`<li>${i.u}:${i.a}</li>`).join("")
- })
-}
-
-setInterval(()=>{
- loadW()
- loadLogs()
-},2000)
+setInterval(load,2000)
+build()
 </script>
 
 </body>
