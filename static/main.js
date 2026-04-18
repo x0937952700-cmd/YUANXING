@@ -1,32 +1,50 @@
+async function renderWarehouse(){
+  const r = await fetch('/api/w');
+  const data = await r.json();
 
-    async function addInventory(){
-        const text=document.getElementById("batch").value;
-        await fetch("/inventory",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:"batch="+encodeURIComponent(text)});
-    }
+  let html = '<div class="grid">';
 
-    async function placeItem(slot,item){
-        await fetch("/place",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:`slot=${slot}&item=${item}`});
-    }
+  data.forEach(i=>{
+    html += `<div class="cell ${i[2]?'used':'empty'}"
+      draggable="true"
+      ondragstart="drag(event,'${i[0]}')"
+      onclick="focusItem('${i[0]}')">
+      ${i[0]}<br>${i[2]||'未放置'}
+    </div>`;
+  });
 
-    async function searchItem(q){
-        const res=await fetch("/search?q="+q);
-        console.log(await res.json());
-    }
+  html+='</div>';
+  document.getElementById('app').innerHTML=html;
+}
 
-    function render(){
-        const el=document.getElementById("warehouse");
-        if(!el)return;
-        el.innerHTML="";
-        for(let i=1;i<=10;i++){
-            let d=document.createElement("div");
-            d.innerHTML="[格 "+i+"]";
-            d.onclick=()=>placeItem(i,"貨物");
-            el.appendChild(d);
-        }
-    }
+function drag(ev,p){
+  ev.dataTransfer.setData("p",p);
+}
 
-    render();
+async function drop(loc){
+  const p = event.dataTransfer.getData("p");
 
-    const socket=io();
-    socket.on("update",()=>location.reload());
-    
+  await fetch('/api/move',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({p:p,l:loc})
+  });
+
+  renderWarehouse();
+}
+
+async function focusItem(p){
+  const cells = document.querySelectorAll('.cell');
+  cells.forEach(c=>c.classList.remove('highlight'));
+
+  const target = [...cells].find(c=>c.innerText.includes(p));
+  if(target){
+    target.classList.add('highlight');
+
+    let i=0;
+    const t=setInterval(()=>{
+      target.classList.toggle('blink');
+      if(i++>5) clearInterval(t);
+    },300);
+  }
+}
