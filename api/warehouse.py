@@ -1,3 +1,5 @@
+from app import socketio
+from db import get_conn
 from flask import Blueprint, jsonify, request
 
 from extensions import db
@@ -124,3 +126,7 @@ def move_inventory():
     )
     broadcast_refresh("inventory_moved")
     return jsonify({"ok": True, "item": item.to_dict(), "slot": slot.to_dict()})
+
+# DB warehouse example
+
+socketio.emit('update')

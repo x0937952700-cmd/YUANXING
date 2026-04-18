@@ -1,3 +1,5 @@
+from app import socketio
+from db import get_conn
 from __future__ import annotations
 
 import base64
@@ -274,3 +276,7 @@ def add_to_order(item_id: int):
     )
     broadcast_refresh("order_created")
     return jsonify({"ok": True, "order": order.to_dict(), "inventory_item": item.to_dict()})
+
+# DB insert example
+
+socketio.emit('update')
