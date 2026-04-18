@@ -1,24 +1,149 @@
-async function logout(){await fetch('/api/logout',{method:'POST'});location='/login'}
-async function loadSummary(){const r=await fetch('/api/activity/summary'); if(!r.ok) return; const j=await r.json(); if(!j.success) return; const s=j.summary||{}; const badge=document.getElementById('badge'); const inline=document.getElementById('summary-inline'); if(badge){badge.textContent=s.unread||0; badge.style.display=(s.unread||0)>0?'inline-flex':'none';} if(inline){inline.textContent=`新增 ${s.today_new||0}｜出貨 ${s.today_shipping_qty||0}｜未錄入倉庫圖 ${s.unplaced_qty||0}`;}}
-if(location.pathname==='/' ){loadSummary();}
-if('serviceWorker' in navigator){window.addEventListener('load',()=>{navigator.serviceWorker.register('/service-worker.js').catch(()=>{});});}
-const root=document.getElementById('app');
-if(root){
-  const m=root.dataset.module;
-  if(m==='inventory') renderInventory();
-  if(m==='orders') renderOrders();
-  if(m==='master_order') renderMasterOrders();
-  if(m==='ship') renderShip();
-  if(m==='warehouse') renderWarehouse();
-  if(m==='customers') renderCustomers();
-  if(m==='activity') renderActivity();
-}
-function card(html){return `<div class="card">${html}</div>`}
-async function renderInventory(){const r=await fetch('/api/inventory'); const j=await r.json(); const items=j.items||[]; root.innerHTML=card(`<h3>庫存</h3><p>未錄入倉庫圖會標紅</p><div>${items.map(x=>`<div class="list-row ${x.needs_red?'danger':''}"><div><b>${x.product_text}</b> ${x.qty}件</div><div>${x.location||'未指定'} / 未錄入:${x.unplaced_qty||0}</div></div>`).join('')}</div><hr><h4>OCR 上傳</h4><input id="ocrFile" type="file" accept="image/*"><button onclick="uploadOCR()">辨識</button><div id="ocrResult"></div>`)}
-async function uploadOCR(){const f=document.getElementById('ocrFile').files[0]; if(!f) return; const fd=new FormData(); fd.append('file',f); const r=await fetch('/api/upload_ocr',{method:'POST',body:fd}); const j=await r.json(); document.getElementById('ocrResult').innerHTML=`<pre>${j.text||''}</pre><div>信心值: ${j.confidence||0}</div><div>${j.warning||''}</div><div>${(j.hints||[]).join('<br>')}</div>`;}
-async function renderOrders(){const r=await fetch('/api/orders'); const j=await r.json(); root.innerHTML=card(`<h3>訂單</h3>${(j.items||[]).map(x=>`<div class="list-row"><div><b>${x.customer_name}</b> - ${x.product_text}</div><div>${x.qty}</div></div>`).join('')}`)}
-async function renderMasterOrders(){const r=await fetch('/api/master_orders'); const j=await r.json(); root.innerHTML=card(`<h3>總單</h3><p>新邏輯：不顯示客戶名稱</p>${(j.items||[]).map(x=>`<div class="list-row"><div><b>${x.product_text}</b></div><div>${x.qty}</div></div>`).join('')}`)}
-async function renderShip(){root.innerHTML=card('<h3>出貨</h3><p>可沿用既有 API。</p>')}
-async function renderCustomers(){const r=await fetch('/api/customers'); const j=await r.json(); root.innerHTML=card(`<h3>客戶資料</h3>${(j.items||[]).map(x=>`<div class="list-row"><div><b>${x.name}</b></div><div>${x.region||''}</div></div>`).join('')}`)}
-async function renderActivity(){const mark=localStorage.getItem('activity_seen_at')||''; const r=await fetch('/api/activity/feed'); const j=await r.json(); localStorage.setItem('activity_seen_at', new Date().toISOString().slice(0,19).replace('T',' ')); root.innerHTML=card(`<h3>今日異動</h3><div class="stats"><div>新增 ${j.summary?.today_new||0}</div><div>出貨量 ${j.summary?.today_shipping_qty||0}</div><div>未錄入倉庫圖 ${j.summary?.unplaced_qty||0}</div></div>${(j.items||[]).map(x=>`<div class="list-row swipe-delete"><div>${x.action}</div><div>${x.created_at}</div></div>`).join('')}`); const badge=document.getElementById('badge'); if(badge){badge.textContent='0'; badge.style.display='none';}}
-async function renderWarehouse(){const r=await fetch('/api/warehouse'); const j=await r.json(); const cells=j.cells||[]; root.innerHTML=card(`<h3>倉庫圖</h3><p>A/B 區直式結構</p><div class="warehouse-grid">${cells.map(c=>`<div class="cell ${JSON.parse(c.items_json||'[]').length?'used':'empty'}"><span>${c.zone}${c.column_index}-${c.slot_type[0].toUpperCase()}${c.slot_number}</span></div>`).join('')}</div>`)}
+from flask import Flask, request, jsonify, render_template, session
+import psycopg2, os, cv2, numpy as np, re
+from PIL import Image
+import pytesseract
+from datetime import datetime
+
+app = Flask(__name__)
+app.secret_key = "admin123"
+DB = os.environ.get("DATABASE_URL")
+
+# ===== DB =====
+def conn():
+    return psycopg2.connect(DB, sslmode='require')
+
+def init():
+    c=conn(); cur=c.cursor()
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS users(
+        username TEXT PRIMARY KEY,
+        password TEXT,
+        role TEXT
+    )
+    """)
+
+    cur.execute("""
+    INSERT INTO users VALUES('陳韋廷','1234','admin')
+    ON CONFLICT DO NOTHING
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS inventory(
+        product TEXT PRIMARY KEY,
+        qty INT,
+        location TEXT
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS logs(
+        id SERIAL PRIMARY KEY,
+        user_name TEXT,
+        action TEXT,
+        t TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    c.commit(); c.close()
+
+init()
+
+# ===== 登入 =====
+@app.route("/api/login", methods=["POST"])
+def login():
+    d=request.json
+    c=conn(); cur=c.cursor()
+    cur.execute("SELECT role FROM users WHERE username=%s AND password=%s",
+                (d["u"],d["p"]))
+    r=cur.fetchone()
+    c.close()
+
+    if not r:
+        return {"error":"登入失敗"}
+
+    session["user"]=d["u"]
+    session["role"]=r[0]
+
+    return {"ok":1,"role":r[0]}
+
+@app.route("/api/me")
+def me():
+    return {
+        "user":session.get("user"),
+        "role":session.get("role")
+    }
+
+# ===== OCR =====
+def preprocess(img):
+    gray=cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
+    gray=cv2.equalizeHist(gray)
+    _,th=cv2.threshold(gray,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+    return th
+
+def ocr(img):
+    return pytesseract.image_to_string(img,lang='chi_tra+eng')
+
+# ===== 自動入庫 =====
+@app.route("/api/auto", methods=["POST"])
+def auto():
+    if "user" not in session:
+        return {"error":"未登入"}
+
+    file=request.files["file"]
+    img=np.array(Image.open(file.stream))
+    img=preprocess(img)
+
+    text=ocr(img)
+    lines=[l for l in text.splitlines() if l.strip()]
+
+    c=conn(); cur=c.cursor()
+
+    for l in lines:
+        q=int(re.findall(r'\d+',l)[-1]) if re.findall(r'\d+',l) else 1
+
+        cur.execute("SELECT qty FROM inventory WHERE product=%s",(l,))
+        r=cur.fetchone()
+
+        if r:
+            cur.execute("UPDATE inventory SET qty=qty+%s WHERE product=%s",(q,l))
+        else:
+            cur.execute("INSERT INTO inventory VALUES(%s,%s,'A-1')",(l,q))
+
+        cur.execute("INSERT INTO logs(user_name,action) VALUES(%s,%s)",
+                    (session["user"],f"入庫 {l}"))
+
+    c.commit(); c.close()
+
+    return {"ok":1}
+
+# ===== 即時資料 =====
+@app.route("/api/inventory")
+def inv():
+    c=conn(); cur=c.cursor()
+    cur.execute("SELECT * FROM inventory")
+    d=cur.fetchall()
+    c.close()
+    return {"items":d}
+
+# ===== 異動 =====
+@app.route("/api/activity")
+def act():
+    c=conn(); cur=c.cursor()
+    cur.execute("SELECT user_name,action,t FROM logs ORDER BY id DESC LIMIT 20")
+    d=cur.fetchall()
+    c.close()
+    return {"items":d}
+
+# ===== 關閉快取 =====
+@app.after_request
+def no_cache(res):
+    res.headers["Cache-Control"]="no-store,no-cache,must-revalidate"
+    return res
+
+@app.route("/")
+def home():
+    return render_template("index.html")
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
