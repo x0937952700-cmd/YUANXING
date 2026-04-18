@@ -1,144 +1,196 @@
-import io
-import os
-import re
-from typing import Any
 
-import requests
-from PIL import Image, ImageEnhance, ImageFilter
+import re
+from difflib import get_close_matches
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+
+from db import get_db, log_error, get_corrections, list_inventory
 
 try:
-    import pytesseract  # type: ignore
+    import pytesseract
 except Exception:
     pytesseract = None
 
-from db import get_corrections
+NOISE_WORDS = [
+    "全部筆記", "昨天", "今天", "備忘錄", "新增", "完成", "搜尋",
+    "筆記", "ocr", "key", "掃描文件", "編輯", "返回", "分享"
+]
 
+def _focus_blue_pixels(img):
+    """盡量只保留藍色字體，降低紅色/綠色/背景雜訊干擾。"""
+    try:
+        rgb = img.convert("RGB")
+        width, height = rgb.size
+        pix = rgb.load()
+        min_x, min_y = width, height
+        max_x, max_y = 0, 0
+        found = False
+        out = Image.new("RGB", (width, height), "white")
+        out_pix = out.load()
+        for y in range(height):
+            for x in range(width):
+                r, g, b = pix[x, y]
+                if b > r + 20 and b > g + 8 and b > 60:
+                    found = True
+                    out_pix[x, y] = (0, 0, 0)
+                    if x < min_x: min_x = x
+                    if y < min_y: min_y = y
+                    if x > max_x: max_x = x
+                    if y > max_y: max_y = y
+        if found and max_x > min_x and max_y > min_y:
+            pad = 18
+            box = (max(0, min_x - pad), max(0, min_y - pad), min(width, max_x + pad), min(height, max_y + pad))
+            return out.crop(box)
+        return img.convert("L")
+    except Exception:
+        return img.convert("L")
 
-def _blue_text_preprocess(image: Image.Image) -> Image.Image:
-    image = image.convert("RGB")
-    width, height = image.size
-    target_w = max(min(width, 1800), 1000)
-    target_h = int(height * target_w / max(width, 1))
-    image = image.resize((target_w, target_h))
-    pixels = image.load()
-    for y in range(image.size[1]):
-        for x in range(image.size[0]):
-            r, g, b = pixels[x, y]
-            blueish = b > g + 18 and b > r + 18
-            if blueish:
-                pixels[x, y] = (0, 0, 0)
-            else:
-                pixels[x, y] = (255, 255, 255)
-    image = image.convert("L")
-    image = ImageEnhance.Contrast(image).enhance(2.6)
-    image = image.filter(ImageFilter.SHARPEN)
-    return image
+def preprocess_image(image_path):
+    img = Image.open(image_path)
+    img = ImageOps.exif_transpose(img)
+    img = img.convert("RGB")
+    img = _focus_blue_pixels(img)
+    img = img.convert("L")
+    width, height = img.size
+    if width < 1200:
+        img = img.resize((width * 2, height * 2))
+    img = img.filter(ImageFilter.MedianFilter())
+    img = ImageEnhance.Contrast(img).enhance(2.4)
+    img = ImageEnhance.Sharpness(img).enhance(1.9)
+    return img
 
-
-def _ocr_space_request(image_bytes: bytes, api_key: str) -> dict[str, Any]:
-    response = requests.post(
-        "https://api.ocr.space/parse/image",
-        data={
-            "apikey": api_key,
-            "language": "cht",
-            "isOverlayRequired": False,
-            "OCREngine": 2,
-            "scale": True,
-            "detectOrientation": True,
-        },
-        files={"file": ("crop.png", image_bytes)},
-        timeout=60,
-    )
-    response.raise_for_status()
-    data = response.json()
-    if data.get("IsErroredOnProcessing"):
-        msg = "; ".join(data.get("ErrorMessage") or data.get("ErrorDetails") or ["OCR.Space 處理失敗"])
-        raise RuntimeError(msg)
-    parsed = data.get("ParsedResults") or []
-    text = "\n".join((item.get("ParsedText") or "").strip() for item in parsed).strip()
-    return {"text": text, "confidence": 88.0 if text else 0.0, "engine": "ocr.space"}
-
-
-def _pytesseract_request(image: Image.Image) -> dict[str, Any]:
-    if pytesseract is None:
-        return {"text": "", "confidence": 0.0, "engine": "none"}
-    text = pytesseract.image_to_string(image, lang="chi_tra+eng").strip()
-    confidence = 58.0 if text else 0.0
-    return {"text": text, "confidence": confidence, "engine": "pytesseract"}
-
-
-def _apply_corrections(text: str) -> str:
-    corrections = get_corrections()
-    for wrong, correct in corrections.items():
-        text = text.replace(wrong, correct)
+def normalize_text(text):
+    text = (text or "").strip()
+    replace_map = {
+        " ": "",
+        "×": "x",
+        "X": "x",
+        "：": ":",
+        "O": "0",
+        "o": "0",
+        "I": "1",
+        "l": "1",
+        "|": "1",
+        "（": "(",
+        "）": ")",
+        "＊": "*",
+        "﹡": "*",
+    }
+    for old, new in replace_map.items():
+        text = text.replace(old, new)
     return text
 
+def is_noise_line(text):
+    low = text.lower()
+    if not text.strip():
+        return True
+    for noise in NOISE_WORDS:
+        if noise.lower() in low:
+            return True
+    if re.match(r"^\d{1,4}[/-]\d{1,2}[/-]\d{1,4}$", text):
+        return True
+    if re.match(r"^\d{1,2}:\d{2}$", text):
+        return True
+    if re.match(r"^\d{1,3}$", text):
+        return True
+    return False
 
-def parse_ocr_text(text: str) -> dict[str, Any]:
-    text = _apply_corrections(text or "")
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    items = []
-    for line in lines:
-        m = re.search(r"(.+?)\s+(\d+)\s*(件|片|支|包|張|組|條|箱|pcs)?$", line)
+def get_known_products():
+    rows = list_inventory()
+    return [r["product_text"] for r in rows if r.get("product_text")]
+
+def apply_ai_correction(product_name):
+    product_name = normalize_text(product_name)
+    corrections = get_corrections()
+    if product_name in corrections:
+        return corrections[product_name]
+    known_products = get_known_products()
+    if known_products:
+        matches = get_close_matches(product_name, known_products, n=1, cutoff=0.72)
+        if matches:
+            return matches[0]
+    return product_name
+
+def parse_line(line):
+    line = normalize_text(line)
+    # split on = or : then quantity
+    patterns = [
+        r"(.+?)[=:](\d+)$",
+        r"(.+?)[x](\d+)$",
+        r"(.+?)\*(\d+)$",
+        r"(.+?)\s+(\d+)$",
+    ]
+    for p in patterns:
+        m = re.match(p, line)
         if m:
-            items.append({
-                "product_text": m.group(1).strip(),
-                "qty": int(m.group(2)),
-                "unit": m.group(3) or "件",
-                "product_code": "",
-            })
-    if not items and lines:
-        qty_match = re.search(r"(\d+)", text)
-        qty = int(qty_match.group(1)) if qty_match else 1
-        items = [{"product_text": lines[0], "qty": qty, "unit": "件", "product_code": ""}]
-    return {"text": "\n".join(lines), "items": items}
+            return m.group(1).strip(), int(m.group(2))
+    return line, 1
 
-
-def process_ocr_text(path: str) -> dict[str, Any]:
-    api_key = os.getenv("OCR_SPACE_API_KEY", "").strip()
-    original_image = Image.open(path)
-    processed = _blue_text_preprocess(original_image)
-    output = io.BytesIO()
-    processed.save(output, format="PNG")
-    processed_bytes = output.getvalue()
-
-    result = {"text": "", "confidence": 0.0, "engine": "none"}
-    hints = []
-    warning = ""
-
-    if api_key:
-        try:
-            result = _ocr_space_request(processed_bytes, api_key)
-        except Exception as exc:
-            warning = f"OCR API 失敗，已改用備援辨識：{exc}"
-
-    if not result.get("text"):
-        try:
-            result = _pytesseract_request(processed)
-        except Exception as exc:
-            warning = f"本機辨識失敗：{exc}"
-
-    text = _apply_corrections((result.get("text") or "").strip())
-    parsed = parse_ocr_text(text)
-
-    if not text:
-        warning = warning or "辨識失敗，請手動編輯"
-        hints = [
-            "到 Render 服務的 Environment 加入 OCR_SPACE_API_KEY",
-            "上傳後先框選較小的文字區域再辨識",
-            "優先拍藍色字，避免陰影與反光",
-            "畫面模糊時請靠近一點再拍",
-            "若還是失敗，辨識文字框可直接手動修改後送出",
-        ]
-    elif (result.get("confidence") or 0) < 80:
-        warning = warning or "辨識信心偏低，請確認內容"
-
+def parse_ocr_text(text):
+    lines = []
+    items = []
+    for raw in (text or "").splitlines():
+        raw = raw.strip()
+        if not raw or is_noise_line(raw):
+            continue
+        product_raw, qty = parse_line(raw)
+        if is_noise_line(product_raw):
+            continue
+        product_fixed = apply_ai_correction(product_raw)
+        items.append({
+            "raw_text": product_raw,
+            "product_text": product_fixed,
+            "product_code": product_fixed.split("=")[0],
+            "qty": qty
+        })
+        lines.append(f"{product_fixed}={qty}")
     return {
-        "success": True,
-        "text": parsed.get("text", text),
-        "items": parsed.get("items", []),
-        "confidence": int(result.get("confidence", 0) or 0),
-        "engine": result.get("engine", "none"),
-        "warning": warning,
-        "hints": hints,
+        "text": "\n".join(lines),
+        "lines": lines,
+        "items": items
     }
+
+def process_ocr_text(image_path):
+    try:
+        if pytesseract is None:
+            return {"success": False, "duplicate": False, "text": "", "lines": [], "items": [], "confidence": 0}
+        img = preprocess_image(image_path)
+        confidence_values = []
+        try:
+            raw_data = pytesseract.image_to_data(
+                img,
+                lang="chi_tra+eng",
+                config="--psm 6",
+                output_type=pytesseract.Output.DICT
+            )
+            for conf in raw_data.get("conf", []):
+                try:
+                    val = float(conf)
+                    if val > 0:
+                        confidence_values.append(val)
+                except Exception:
+                    pass
+        except Exception:
+            raw_data = {}
+        avg_confidence = int(sum(confidence_values) / len(confidence_values)) if confidence_values else 0
+
+        # 先用藍字強化圖，如果結果太少再用原圖備援
+        texts = []
+        original = ImageOps.exif_transpose(Image.open(image_path)).convert("L")
+        for candidate in [img, original]:
+            try:
+                texts.append(pytesseract.image_to_string(candidate, lang="chi_tra+eng", config="--psm 6"))
+            except Exception:
+                continue
+        text = next((t for t in texts if t and t.strip()), "")
+        parsed = parse_ocr_text(text)
+        return {
+            "success": True,
+            "duplicate": False,
+            "text": parsed["text"],
+            "lines": parsed["lines"],
+            "items": parsed["items"],
+            "confidence": avg_confidence
+        }
+    except Exception as e:
+        log_error("process_ocr_text", e)
+        return {"success": False, "duplicate": False, "text": "", "lines": [], "items": [], "confidence": 0}

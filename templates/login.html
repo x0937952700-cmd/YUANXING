@@ -1,8 +1,22 @@
 
-<link rel="stylesheet" href="/static/style.css">
-<h1>登入</h1>
-<form method="post">
-<input name="user"><br><br>
-<input name="pass"><br><br>
-<button class="btn">登入</button>
-</form>
+{% extends "base.html" %}
+{% block body %}
+<div class="auth-screen">
+  <div class="auth-card glass">
+    <div class="eyebrow">AI OCR 智慧辨識 + 倉庫定位 + 出貨管理</div>
+    <h1 class="page-title center">沅興木業</h1>
+    <p class="muted center">登入後自動記住你，支援手機與電腦同步</p>
+
+    <div id="login-error" class="alert hidden"></div>
+
+    <label class="field-label">帳號</label>
+    <input id="login-username" class="text-input" type="text" placeholder="請輸入員工姓名" autocomplete="username">
+
+    <label class="field-label">密碼</label>
+    <input id="login-password" class="text-input" type="password" placeholder="請輸入密碼" autocomplete="current-password">
+
+    <button class="primary-btn full" onclick="submitLogin()">登入</button>
+    <button class="ghost-btn full" onclick="toggleLoginSave()">切換永久登入：<span id="remember-label">開</span></button>
+  </div>
+</div>
+{% endblock %}
