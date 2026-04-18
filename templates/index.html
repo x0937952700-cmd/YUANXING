@@ -6,11 +6,6 @@
 
 <title>沅興木業</title>
 
-<!-- 🔥 永不快取 -->
-<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
-<meta http-equiv="Pragma" content="no-cache">
-<meta http-equiv="Expires" content="0">
-
 <style>
 body{
     margin:0;
@@ -21,6 +16,7 @@ body{
     align-items:center;
 }
 
+/* ===== 標題 ===== */
 .title{
     margin-top:40px;
     font-size:28px;
@@ -28,17 +24,19 @@ body{
     color:#333;
 }
 
+/* ===== 容器 ===== */
 .menu{
     margin-top:30px;
     width:100%;
-    max-width:400px;
+    max-width:420px;
     display:flex;
     flex-direction:column;
     align-items:center;
 }
 
+/* ===== 按鈕 ===== */
 .menu-btn{
-    width:85%;
+    width:90%;
     padding:20px;
     margin:12px 0;
     border:none;
@@ -52,38 +50,36 @@ body{
 
 .menu-btn:active{
     transform:scale(0.96);
+    box-shadow:0 2px 5px rgba(0,0,0,0.2);
 }
 </style>
 </head>
 
 <body>
 
+<!-- ===== 標題（置中） ===== -->
 <div class="title">沅興木業</div>
 
+<!-- ===== 主選單 ===== -->
 <div class="menu">
-    <button class="menu-btn" onclick="go('inventory')">庫存</button>
-    <button class="menu-btn" onclick="go('orders')">訂單</button>
-    <button class="menu-btn" onclick="go('master_order')">總單</button>
-    <button class="menu-btn" onclick="go('ship')">出貨</button>
-    <button class="menu-btn" onclick="go('warehouse')">倉庫圖</button>
-    <button class="menu-btn" onclick="go('customers')">客戶資料</button>
+
+    <button class="menu-btn" onclick="goPage('inventory')">庫存</button>
+
+    <button class="menu-btn" onclick="goPage('orders')">訂單</button>
+
+    <button class="menu-btn" onclick="goPage('master')">總單</button>
+
+    <button class="menu-btn" onclick="goPage('ship')">出貨</button>
+
+    <button class="menu-btn" onclick="goPage('warehouse')">倉庫圖</button>
+
+    <button class="menu-btn" onclick="goPage('customers')">客戶資料</button>
+
 </div>
 
-<div id="app"></div>
-
 <script>
-// 🔥 強制更新 SW（重點）
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.getRegistrations().then(regs => {
-    regs.forEach(r => r.unregister());
-  });
-
-  navigator.serviceWorker.register('/static/service-worker.js?v=' + Date.now());
-}
-
-// 導頁
-function go(p){
-  document.getElementById('app').innerHTML = "<h3>"+p+"</h3>";
+function goPage(page){
+    alert("準備進入：" + page + "（之後我可以幫你接完整系統）");
 }
 </script>
 
