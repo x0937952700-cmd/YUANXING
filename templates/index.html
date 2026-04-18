@@ -2,12 +2,15 @@
 {% block body %}
 <div class="home-screen">
   <div class="hero center">
+    <div class="eyebrow">AI OCR 智慧辨識 + 倉庫定位 + 出貨管理</div>
     <h1 class="page-title center">沅興木業</h1>
+
     <div class="home-info-row">
       <div class="info-pill">登入者：<strong>{{ username }}</strong></div>
       <div class="info-pill">日期：<strong id="home-date">{{ today or '' }}</strong></div>
       <div class="info-pill activity-pill">今日異動：<strong id="home-activity-count">0</strong></div>
     </div>
+
     <div class="home-top-actions">
       <a class="home-mini-btn" href="{{ url_for('settings_page') }}">設定</a>
       <a class="home-mini-btn activity-btn" href="{{ url_for('activity_page') }}">
@@ -16,6 +19,7 @@
       </a>
       <button class="home-mini-btn" onclick="logout()">登出</button>
     </div>
+
     <div class="home-user-row">
       <div class="user-pill">{{ username }}</div>
     </div>

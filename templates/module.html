@@ -19,18 +19,24 @@
     <div class="meta-row">
       <span class="pill warn" id="ocr-warning-pill">尚未辨識</span>
     </div>
-    {% if module_key != 'inventory' %}
+
+    {% if module_key in ['orders','ship'] %}
     <label class="field-label">客戶名稱</label>
     <input class="text-input" id="customer-name" placeholder="請輸入或點選客戶">
     {% endif %}
+
     <label class="field-label">倉庫格位 / 預設位置</label>
     <input class="text-input" id="location-input" placeholder="例如：A1-front-1">
+
     <label class="field-label">OCR 文字框（可直接修改）</label>
     <textarea class="text-area" id="ocr-text" placeholder="辨識後文字會出現在這裡，可人工修改"></textarea>
+
     <div class="btn-row">
       <button class="primary-btn" onclick="confirmSubmit()">確認送出</button>
       <button class="ghost-btn" onclick="reverseLookup()">反查商品位置</button>
+      <button class="ghost-btn" onclick="resetModuleForm()">重新清空</button>
     </div>
+
     <div id="module-result" class="result-card hidden"></div>
   </div>
   {% endif %}
@@ -172,22 +178,8 @@
   </section>
   {% endif %}
 
-  {% if module_key not in ['warehouse','customers','inventory','shipping_query','activity'] %}
-  <section class="subsection" id="default-module-info">
-    <div class="glass panel">
-      <div class="section-title">流程</div>
-      <div class="steps">
-        <div class="step">上傳 / 拍照</div>
-        <div class="step">OCR</div>
-        <div class="step">人工修正</div>
-        <div class="step">確認送出</div>
-      </div>
-      <div class="muted">頁面會在同一網站內切換，不會一直開新分頁。</div>
-    </div>
-  </section>
-  {% endif %}
-
   <input id="selected-item-json" type="hidden">
+
   <div id="warehouse-modal" class="modal hidden">
     <div class="modal-card glass">
       <div class="modal-head">
@@ -195,18 +187,28 @@
         <button class="icon-btn" onclick="closeWarehouseModal()">✕</button>
       </div>
       <div id="warehouse-modal-meta" class="muted"></div>
+
+      <label class="field-label">客戶名稱</label>
+      <input id="warehouse-customer-search" class="text-input" placeholder="輸入關鍵字，顯示完整客戶名" oninput="filterWarehouseCustomers()">
+      <div id="warehouse-customer-suggestions" class="chip-list"></div>
+
       <label class="field-label">搜尋已錄入商品</label>
-      <input id="warehouse-item-search" class="text-input" placeholder="輸入 113 直接篩選">
+      <input id="warehouse-item-search" class="text-input" placeholder="輸入 113 直接篩選" oninput="filterWarehouseItems()">
+
       <label class="field-label">加入商品</label>
       <select id="warehouse-item-select" class="text-input"></select>
+
       <label class="field-label">加入數量</label>
       <input id="warehouse-add-qty" class="text-input" type="number" min="1" value="1">
+
       <div class="btn-row">
         <button class="primary-btn" onclick="addSelectedItemToCell()">加入格位</button>
         <button class="ghost-btn" onclick="saveWarehouseCell()">儲存格位</button>
       </div>
+
       <label class="field-label">格位備註</label>
       <textarea id="warehouse-note" class="text-area small"></textarea>
+
       <div id="warehouse-cell-items" class="chip-list"></div>
     </div>
   </div>
