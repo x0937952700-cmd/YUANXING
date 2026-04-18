@@ -2,7 +2,6 @@ from flask import Flask, request, jsonify, render_template
 import psycopg2, os, cv2, numpy as np
 from PIL import Image
 import pytesseract
-import easyocr
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 DB = os.environ.get("DATABASE_URL")
@@ -40,6 +39,7 @@ def init():
     )
     """)
 
+    # OCR AI學習
     cur.execute("""
     CREATE TABLE IF NOT EXISTS ocr_fix(
         wrong TEXT PRIMARY KEY,
@@ -52,8 +52,7 @@ def init():
 
 init()
 
-# ===== OCR =====
-reader = easyocr.Reader(['ch_tra','en'], gpu=False)
+# ===== OCR 強化（關鍵）=====
 
 def read_img(file):
     img = Image.open(file.stream).convert("RGB")
@@ -62,6 +61,7 @@ def read_img(file):
 def auto_crop(img):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     edges = cv2.Canny(gray,50,150)
+
     cnts,_ = cv2.findContours(edges,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
     if cnts:
         c = max(cnts, key=cv2.contourArea)
@@ -69,37 +69,66 @@ def auto_crop(img):
         return img[y:y+h,x:x+w]
     return img
 
-def ocr_tesseract(img):
-    text = pytesseract.image_to_string(img, lang='chi_tra+eng')
-    return text, 0.6
+def preprocess(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-def ocr_easy(img):
-    res = reader.readtext(img)
-    text = "\n".join([r[1] for r in res])
-    conf = float(np.mean([r[2] for r in res])) if res else 0.0
-    return text, conf
+    # 提升對比
+    gray = cv2.equalizeHist(gray)
+
+    # 降噪
+    blur = cv2.GaussianBlur(gray,(3,3),0)
+
+    # 二值化（關鍵）
+    _,th = cv2.threshold(blur,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+
+    return th
+
+def ocr(img):
+    # 多模式辨識（提升成功率）
+    configs = [
+        "--oem 3 --psm 6",
+        "--oem 3 --psm 7",
+        "--oem 3 --psm 11"
+    ]
+
+    texts = []
+    for c in configs:
+        t = pytesseract.image_to_string(img, lang='chi_tra+eng', config=c)
+        if t.strip():
+            texts.append(t)
+
+    # 選最長的（最完整）
+    best = max(texts, key=len) if texts else ""
+
+    return best, 0.85
 
 def apply_fix(text):
     c=conn(); cur=c.cursor()
     cur.execute("SELECT wrong,correct FROM ocr_fix ORDER BY count DESC")
+
     for w,corr in cur.fetchall():
         if w in text:
             text = text.replace(w,corr)
-    text = text.replace('O','0').replace('l','1')
+
+    # 常見修正（強化）
+    text = text.replace('O','0').replace('l','1').replace('I','1')
+
     c.close()
     return text
+
+# ===== OCR API =====
 
 @app.route("/api/upload_ocr", methods=["POST"])
 def upload_ocr():
     file = request.files["file"]
-    img = auto_crop(read_img(file))
 
-    t1,c1 = ocr_tesseract(img)
-    t2,c2 = ocr_easy(img)
+    img = read_img(file)
+    img = auto_crop(img)
+    img = preprocess(img)
 
-    text,conf = (t2,c2) if c2>c1 else (t1,c1)
-
+    text,conf = ocr(img)
     text = apply_fix(text)
+
     lines = [i.strip() for i in text.splitlines() if i.strip()]
 
     return jsonify({
@@ -112,12 +141,14 @@ def upload_ocr():
 def learn():
     d=request.json
     c=conn(); cur=c.cursor()
+
     cur.execute("""
     INSERT INTO ocr_fix(wrong,correct,count)
     VALUES(%s,%s,1)
     ON CONFLICT (wrong)
     DO UPDATE SET correct=%s, count=ocr_fix.count+1
     """,(d["w"],d["c"],d["c"]))
+
     c.commit(); c.close()
     return {"ok":1}
 
@@ -146,7 +177,7 @@ def add():
         cur.execute("UPDATE inventory SET qty=qty+%s WHERE product=%s",(d["q"],d["p"]))
     else:
         cur.execute("INSERT INTO inventory VALUES(%s,%s,'',%s)",
-                    (d["p"],d["q"],d.get("c","")))
+                    (d["p"],d["q"], d.get("c","")))
 
     cur.execute("INSERT INTO logs(action) VALUES(%s)",("入庫 "+d["p"],))
     c.commit(); c.close()
@@ -197,6 +228,7 @@ def move():
     c.commit(); c.close()
     return {"ok":1}
 
+# ===== 倉庫資料 =====
 @app.route("/api/w")
 def w():
     c=conn(); cur=c.cursor()
@@ -212,7 +244,7 @@ def act():
     d=cur.fetchall(); c.close()
     return {"items":[{"a":i[0],"t":str(i[1])} for i in d]}
 
-# ===== 完全關閉快取（關鍵）=====
+# ===== 關閉快取 =====
 @app.after_request
 def no_cache(res):
     res.headers["Cache-Control"]="no-store,no-cache,must-revalidate,max-age=0"
