@@ -42,7 +42,7 @@ def init():
 
 init()
 
-# ===== OCR強化 =====
+# ================= OCR =================
 
 def read_img(file):
     img = Image.open(file.stream).convert("RGB")
@@ -56,120 +56,172 @@ def preprocess(img):
     return th
 
 def ocr(img):
-    configs = [
-        "--oem 3 --psm 6",
-        "--oem 3 --psm 7",
-        "--oem 3 --psm 11"
-    ]
-
+    configs = ["--oem 3 --psm 6","--oem 3 --psm 7","--oem 3 --psm 11"]
     texts = []
     for c in configs:
         t = pytesseract.image_to_string(img, lang='chi_tra+eng', config=c)
         if t.strip():
             texts.append(t)
-
-    best = max(texts, key=len) if texts else ""
-    return best
+    return max(texts, key=len) if texts else ""
 
 def apply_fix(text):
     c=conn(); cur=c.cursor()
     cur.execute("SELECT wrong,correct FROM ocr_fix ORDER BY count DESC")
     for w,corr in cur.fetchall():
         text = text.replace(w,corr)
-    text = text.replace('O','0').replace('l','1')
     c.close()
-    return text
-
-# ===== 解析 =====
+    return text.replace('O','0').replace('l','1')
 
 def parse_lines(text):
     lines = [i.strip() for i in text.splitlines() if i.strip()]
     result = []
-
     for l in lines:
-        size = re.findall(r'\d+[xX×]\d+', l)
         qty = re.findall(r'\d+', l)
-
         result.append({
             "product": l,
-            "size": size[0] if size else "",
             "qty": int(qty[-1]) if qty else 1
         })
-
     return result
 
-# ===== 自動分配倉庫格位 =====
-
-def auto_location():
-    c=conn(); cur=c.cursor()
-
-    # 找目前最大位置
-    cur.execute("SELECT location FROM inventory WHERE location!=''")
-    used = [i[0] for i in cur.fetchall()]
-
-    for i in range(1,100):
-        loc = f"A-{i}"
-        if loc not in used:
-            return loc
-
-    return "A-0"
-
-# ===== 全自動 OCR → 入庫 =====
-
-@app.route("/api/auto_ocr", methods=["POST"])
-def auto_ocr():
-
+# ===== OCR（不自動入庫）=====
+@app.route("/api/upload_ocr", methods=["POST"])
+def upload_ocr():
     file = request.files["file"]
-
-    img = read_img(file)
-    img = preprocess(img)
-
-    text = ocr(img)
-    text = apply_fix(text)
-
+    img = preprocess(read_img(file))
+    text = apply_fix(ocr(img))
     parsed = parse_lines(text)
-
-    c=conn(); cur=c.cursor()
-
-    results = []
-
-    for item in parsed:
-        p = item["product"]
-        q = item["qty"]
-
-        loc = auto_location()
-
-        cur.execute("SELECT qty FROM inventory WHERE product=%s",(p,))
-        r = cur.fetchone()
-
-        if r:
-            cur.execute("UPDATE inventory SET qty=qty+%s WHERE product=%s",(q,p))
-        else:
-            cur.execute("INSERT INTO inventory VALUES(%s,%s,%s,'')",(p,q,loc))
-
-        cur.execute("INSERT INTO logs(action) VALUES(%s)",(f"自動入庫 {p}",))
-
-        results.append({
-            "product":p,
-            "qty":q,
-            "location":loc
-        })
-
-    c.commit(); c.close()
 
     return jsonify({
         "text": text,
-        "parsed": parsed,
-        "result": results
+        "lines": [i["product"] for i in parsed],
+        "parsed": parsed
     })
 
-# ===== 查倉庫 =====
+# ================= 核心功能 =================
+
+def auto_location():
+    c=conn(); cur=c.cursor()
+    cur.execute("SELECT location FROM inventory")
+    used = [i[0] for i in cur.fetchall()]
+    c.close()
+
+    for i in range(1,200):
+        loc = f"A-{i}"
+        if loc not in used:
+            return loc
+    return "A-0"
+
+# ===== 入庫（手動）=====
+@app.route("/api/add", methods=["POST"])
+def add():
+    d=request.json
+    c=conn(); cur=c.cursor()
+
+    cur.execute("SELECT qty FROM inventory WHERE product=%s",(d["p"],))
+    r=cur.fetchone()
+
+    if r:
+        cur.execute("UPDATE inventory SET qty=qty+%s WHERE product=%s",(d["q"],d["p"]))
+    else:
+        loc = auto_location()
+        cur.execute("INSERT INTO inventory VALUES(%s,%s,%s,'')",(d["p"],d["q"],loc))
+
+    cur.execute("INSERT INTO logs(action) VALUES(%s)",(f"入庫 {d['p']}",))
+    c.commit(); c.close()
+    return {"ok":1}
+
+# ===== 庫存 =====
+@app.route("/api/inventory")
+def inventory():
+    c=conn(); cur=c.cursor()
+    cur.execute("SELECT product,qty,location FROM inventory")
+    d=cur.fetchall()
+    c.close()
+    return {"items":[{"p":i[0],"q":i[1],"l":i[2]} for i in d]}
+
+# ===== 訂單（防超賣）=====
+@app.route("/api/order", methods=["POST"])
+def order():
+    d=request.json
+    c=conn(); cur=c.cursor()
+
+    cur.execute("SELECT qty FROM inventory WHERE product=%s",(d["p"],))
+    r=cur.fetchone()
+
+    if not r or r[0] < d["q"]:
+        return {"error":"庫存不足"}
+
+    cur.execute("UPDATE inventory SET qty=qty-%s WHERE product=%s",(d["q"],d["p"]))
+    cur.execute("INSERT INTO logs(action) VALUES(%s)",(f"訂單 {d['p']}",))
+
+    c.commit(); c.close()
+    return {"ok":1}
+
+# ===== 出貨 =====
+@app.route("/api/ship", methods=["POST"])
+def ship():
+    d=request.json
+    c=conn(); cur=c.cursor()
+
+    cur.execute("SELECT qty FROM inventory WHERE product=%s",(d["p"],))
+    r=cur.fetchone()
+
+    if not r or r[0] < d["q"]:
+        return {"error":"庫存不足"}
+
+    cur.execute("UPDATE inventory SET qty=qty-%s WHERE product=%s",(d["q"],d["p"]))
+    cur.execute("INSERT INTO logs(action) VALUES(%s)",(f"出貨 {d['p']}",))
+
+    c.commit(); c.close()
+    return {"ok":1}
+
+# ===== 出貨查詢 =====
+@app.route("/api/orders")
+def orders():
+    c=conn(); cur=c.cursor()
+    cur.execute("SELECT action,t FROM logs WHERE action LIKE '出貨%' ORDER BY id DESC")
+    d=cur.fetchall()
+    c.close()
+    return {"items":[{"product":i[0],"time":str(i[1])} for i in d]}
+
+# ===== 倉庫 =====
 @app.route("/api/w")
 def w():
     c=conn(); cur=c.cursor()
     cur.execute("SELECT product,qty,location FROM inventory")
-    d=cur.fetchall(); c.close()
-    return jsonify(d)
+    d=cur.fetchall()
+    c.close()
+    return d
+
+# ===== 拖拉 =====
+@app.route("/api/move", methods=["POST"])
+def move():
+    d=request.json
+    c=conn(); cur=c.cursor()
+
+    cur.execute("UPDATE inventory SET location=%s WHERE product=%s",(d["l"],d["p"]))
+    cur.execute("INSERT INTO logs(action) VALUES(%s)",(f"移動 {d['p']}",))
+
+    c.commit(); c.close()
+    return {"ok":1}
+
+# ===== 客戶 =====
+@app.route("/api/customers")
+def customers():
+    c=conn(); cur=c.cursor()
+    cur.execute("SELECT DISTINCT customer FROM inventory WHERE customer!=''")
+    d=cur.fetchall()
+    c.close()
+    return {"items":[{"name":i[0]} for i in d]}
+
+# ===== 異動 =====
+@app.route("/api/activity")
+def activity():
+    c=conn(); cur=c.cursor()
+    cur.execute("SELECT action,t FROM logs ORDER BY id DESC LIMIT 50")
+    d=cur.fetchall()
+    c.close()
+    return {"items":[{"action":i[0],"t":str(i[1])} for i in d]}
 
 # ===== 首頁 =====
 @app.route("/")
