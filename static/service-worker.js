@@ -1,36 +1,23 @@
-const CACHE_NAME = "static-v2";
-
-const STATIC_ASSETS = [
-  "/static/app.js",
-  "/static/style.css"
-];
+const VERSION = "v20260418"; // 🔥 每次改這個即可
 
 self.addEventListener("install", event => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => cache.addAll(STATIC_ASSETS))
-  );
   self.skipWaiting();
 });
 
 self.addEventListener("activate", event => {
-  event.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(
-        keys.map(key => key !== CACHE_NAME && caches.delete(key))
-      )
-    )
-  );
-  self.clients.claim();
+  event.waitUntil(self.clients.claim());
 });
 
-// 🔥 核心：HTML永遠不快取
+// ❗ 完全不快取 HTML
 self.addEventListener("fetch", event => {
-  if (event.request.headers.get("accept").includes("text/html")) {
-    event.respondWith(fetch(event.request));
+  const req = event.request;
+
+  // HTML → 永遠走網路
+  if (req.headers.get("accept")?.includes("text/html")) {
+    event.respondWith(fetch(req, { cache: "no-store" }));
     return;
   }
 
-  event.respondWith(
-    caches.match(event.request).then(res => res || fetch(event.request))
-  );
+  // 其他 → 直接走網路（不快取）
+  event.respondWith(fetch(req));
 });
