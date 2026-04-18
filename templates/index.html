@@ -1,35 +1,112 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width">
+<style>
+body{font-family:Arial;background:#e9e6e1;text-align:center;}
+.title{font-size:28px;margin:20px;}
+.page{display:none;}
+.active{display:block;}
+button{padding:20px;margin:10px;width:80%;border-radius:12px;}
+</style>
+</head>
 
-<h2>白板OCR 90%版</h2>
+<body>
 
+<div class="title">沅興木業</div>
+
+<div id="home" class="page active">
+<button onclick="go('stock')">庫存</button>
+<button onclick="go('order')">訂單</button>
+<button onclick="go('ship')">出貨</button>
+<button onclick="go('warehouse')">倉庫圖</button>
+<button onclick="go('logs')">紀錄</button>
+</div>
+
+<div id="stock" class="page">
+<button onclick="go('home')">返回</button>
 <input type="file" id="img">
-<button onclick="send()">辨識</button>
+<button onclick="send()">OCR</button>
+<textarea id="txt"></textarea>
+</div>
 
-<div id="conf"></div>
-<form method="post" action="/add">
-<textarea name="text" id="txt"></textarea>
-<button>加入庫存</button>
-</form>
+<div id="order" class="page">
+<button onclick="go('home')">返回</button>
+<input id="p" placeholder="商品">
+<input id="q" placeholder="數量">
+<input id="c" placeholder="客戶">
+<button onclick="createOrder()">建立訂單</button>
+</div>
 
-<ul>
-{% for i in data %}
-<li>{{i}}</li>
-{% endfor %}
-</ul>
+<div id="ship" class="page">
+<button onclick="go('home')">返回</button>
+<input id="sp" placeholder="商品">
+<input id="sq" placeholder="數量">
+<button onclick="ship()">出貨</button>
+</div>
+
+<div id="warehouse" class="page">
+<button onclick="go('home')">返回</button>
+<div id="w"></div>
+</div>
+
+<div id="logs" class="page">
+<button onclick="go('home')">返回</button>
+<ul id="logList"></ul>
+</div>
 
 <script>
-function send(){
- let f=document.getElementById("img").files[0]
- let form=new FormData()
- form.append("image",f)
 
- fetch("/upload",{method:"POST",body:form})
+function go(id){
+ document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'))
+ document.getElementById(id).classList.add('active')
+ if(id==="warehouse") loadWarehouse()
+ if(id==="logs") loadLogs()
+}
+
+function send(){
+ let f=img.files[0]
+ let fd=new FormData()
+ fd.append("image",f)
+
+ fetch("/upload",{method:"POST",body:fd})
  .then(r=>r.json())
- .then(d=>{
-  document.getElementById("txt").value=d.text
-  let c=d.confidence||0
-  let color=c>0.8?"green":(c>0.5?"orange":"red")
-  document.getElementById("conf").innerHTML=
-   `<b style="color:${color}">信心:${c}</b>`
+ .then(d=>txt.value=d.text)
+}
+
+function createOrder(){
+ fetch("/api/order",{
+  method:"POST",
+  headers:{"Content-Type":"application/json"},
+  body:JSON.stringify({product:p.value,qty:q.value,customer:c.value})
  })
 }
+
+function ship(){
+ fetch("/api/ship",{
+  method:"POST",
+  headers:{"Content-Type":"application/json"},
+  body:JSON.stringify({product:sp.value,qty:sq.value})
+ })
+}
+
+function loadWarehouse(){
+ fetch("/api/warehouse")
+ .then(r=>r.json())
+ .then(d=>{
+  w.innerHTML=JSON.stringify(d)
+ })
+}
+
+function loadLogs(){
+ fetch("/api/logs")
+ .then(r=>r.json())
+ .then(d=>{
+  logList.innerHTML=d.map(i=>`<li>${i.action}</li>`).join("")
+ })
+}
+
 </script>
+
+</body>
+</html>
