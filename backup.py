@@ -1,111 +1,94 @@
-
 import json
 import os
 import shutil
 from datetime import datetime
 
-from db import get_db, USE_POSTGRES, DATABASE_URL, list_settings, log_error
+from config import Config
+from extensions import db
 
 BACKUP_FOLDER = "backups"
 os.makedirs(BACKUP_FOLDER, exist_ok=True)
 
+TABLES = [
+    "users",
+    "customers",
+    "warehouse_slots",
+    "inventory_items",
+    "orders",
+    "order_items",
+    "master_order_items",
+    "shipments",
+    "activity_logs",
+    "user_activity_states",
+]
 
-def backup_filename(prefix, ext):
+
+def _backup_filename(prefix: str, ext: str) -> str:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return os.path.join(BACKUP_FOLDER, f"{prefix}_{timestamp}.{ext}")
 
 
-def prune_old_backups(keep=7):
-    files = []
-    for fn in os.listdir(BACKUP_FOLDER):
-        path = os.path.join(BACKUP_FOLDER, fn)
-        if os.path.isfile(path):
-            files.append((os.path.getmtime(path), path))
-    files.sort(reverse=True)
-    for _, path in files[keep:]:
+def _trim_backups(prefix: str, keep: int = 7) -> None:
+    files = sorted([f for f in os.listdir(BACKUP_FOLDER) if f.startswith(prefix + "_")])
+    while len(files) > keep:
+        old = files.pop(0)
         try:
-            os.remove(path)
+            os.remove(os.path.join(BACKUP_FOLDER, old))
         except Exception:
             pass
 
 
-def backup_sqlite():
+def backup_sqlite() -> dict:
     try:
-        db_path = DATABASE_URL.replace("sqlite:///", "")
-        target = backup_filename("sqlite_backup", "db")
+        uri = Config.SQLALCHEMY_DATABASE_URI
+        if not uri.startswith("sqlite:///"):
+            return {"success": False, "error": "目前不是 SQLite 資料庫"}
+        db_path = uri.replace("sqlite:///", "", 1)
+        target = _backup_filename("sqlite_backup", "db")
         shutil.copy2(db_path, target)
-        prune_old_backups()
+        _trim_backups("sqlite_backup")
         return {"success": True, "type": "sqlite", "file": target}
-    except Exception as e:
-        log_error("backup_sqlite", str(e))
-        return {"success": False, "error": str(e)}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
 
 
-def backup_postgres():
+def backup_sqlalchemy_tables() -> dict:
     try:
-        conn = get_db()
-        cur = conn.cursor()
-        tables = [
-            "users", "settings", "customers", "inventory", "orders", "master_orders",
-            "shipping_records", "corrections", "image_hashes", "logs", "errors",
-            "notifications", "warehouse_cells"
-        ]
-        backup_data = {}
-        for table in tables:
-            cur.execute(f"SELECT * FROM {table}")
-            cols = [d[0] for d in cur.description]
-            backup_data[table] = [dict(zip(cols, row)) for row in cur.fetchall()]
-        conn.close()
-        target = backup_filename("postgres_backup", "json")
+        payload = {}
+        with db.engine.begin() as connection:
+            for table in TABLES:
+                rows = connection.exec_driver_sql(f"SELECT * FROM {table}")
+                payload[table] = [dict(row._mapping) for row in rows]
+        target = _backup_filename("database_backup", "json")
         with open(target, "w", encoding="utf-8") as f:
-            json.dump(backup_data, f, ensure_ascii=False, indent=2)
-        prune_old_backups()
-        return {"success": True, "type": "postgres", "file": target}
-    except Exception as e:
-        log_error("backup_postgres", str(e))
-        return {"success": False, "error": str(e)}
+            json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
+        _trim_backups("database_backup")
+        return {"success": True, "type": "json", "file": target}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
 
 
-def backup_images():
-    try:
-        source_dir = "uploads"
-        target_dir = backup_filename("images_backup", "dir")
-        os.makedirs(target_dir, exist_ok=True)
-        if os.path.isdir(source_dir):
-            for fn in os.listdir(source_dir):
-                src = os.path.join(source_dir, fn)
-                if os.path.isfile(src):
-                    shutil.copy2(src, os.path.join(target_dir, fn))
-        prune_old_backups()
-        return {"success": True, "type": "images", "file": target_dir}
-    except Exception as e:
-        log_error("backup_images", str(e))
-        return {"success": False, "error": str(e)}
+def run_daily_backup() -> dict:
+    uri = Config.SQLALCHEMY_DATABASE_URI
+    if uri.startswith("sqlite:///"):
+        return backup_sqlite()
+    return backup_sqlalchemy_tables()
 
 
-def run_daily_backup():
-    try:
-        db_result = backup_postgres() if USE_POSTGRES else backup_sqlite()
-        img_result = backup_images()
-        return {"success": db_result.get("success", False) and img_result.get("success", False), "db": db_result, "images": img_result}
-    except Exception as e:
-        log_error("run_daily_backup", str(e))
-        return {"success": False, "error": str(e)}
-
-
-def list_backups():
+def list_backups() -> dict:
     try:
         files = []
         for filename in os.listdir(BACKUP_FOLDER):
             path = os.path.join(BACKUP_FOLDER, filename)
             if os.path.isfile(path):
-                files.append({
-                    "filename": filename,
-                    "size": os.path.getsize(path),
-                    "created_at": datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d %H:%M:%S"),
-                })
+                files.append(
+                    {
+                        "filename": filename,
+                        "size": os.path.getsize(path),
+                        "created_at": datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                )
         files.sort(key=lambda x: x["created_at"], reverse=True)
         return {"success": True, "files": files}
-    except Exception as e:
-        log_error("list_backups", str(e))
-        return {"success": False, "files": []}
+    except Exception:
+        return {"success": True, "files": []}

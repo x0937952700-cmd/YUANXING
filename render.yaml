@@ -5,19 +5,13 @@ services:
     plan: free
     branch: main
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    startCommand: gunicorn --worker-class eventlet -w 1 app:app
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.10
-      - key: FLASK_ENV
-        value: production
       - key: SECRET_KEY
         generateValue: true
-      - key: DATABASE_URL
-        fromDatabase:
-          name: yuanxing-db
-          property: connectionString
-
-databases:
-  - name: yuanxing-db
-    plan: free
+      - key: DEFAULT_ADMIN_USERNAME
+        value: admin
+      - key: DEFAULT_ADMIN_PASSWORD
+        value: admin1234

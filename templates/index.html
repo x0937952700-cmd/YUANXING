@@ -1,32 +1,267 @@
-{% extends "base.html" %}
-{% block body %}
-<div class="home-screen">
-  <div class="hero center">
-    <div class="eyebrow">AI OCR 智慧辨識 + 倉庫定位 + 出貨管理</div>
-    <h1 class="page-title center">沅興木業</h1>
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>沅興木業</title>
+  <meta name="theme-color" content="#5c4033">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div id="toastContainer" class="toast-container"></div>
 
-    <div class="home-top-actions">
-      <a class="home-mini-btn" href="{{ url_for('settings_page') }}">設定</a>
-      <a class="home-mini-btn activity-btn" href="{{ url_for('activity_page') }}">
-        <span>今日異動</span>
-        <span id="activity-badge" class="badge hidden">0</span>
-      </a>
-      <button class="home-mini-btn" type="button" onclick="logout()">登出</button>
-    </div>
-
-    <div class="home-user-row">
-      <div class="user-pill">{{ username }}</div>
+  <div id="loginScreen" class="login-screen">
+    <div class="login-card">
+      <div class="brand-mark">沅興木業</div>
+      <h1>現場倉庫管理系統</h1>
+      <p>預設帳號：admin / admin1234</p>
+      <form id="loginForm" class="stack">
+        <input id="loginUsername" type="text" placeholder="帳號" value="admin" required>
+        <input id="loginPassword" type="password" placeholder="密碼" value="admin1234" required>
+        <button type="submit" class="btn btn-primary btn-lg">登入</button>
+      </form>
     </div>
   </div>
 
-  <div class="home-menu vertical">
-    <a class="menu-btn" href="{{ url_for('inventory_page') }}" target="_self">庫存</a>
-    <a class="menu-btn" href="{{ url_for('orders_page') }}" target="_self">訂單</a>
-    <a class="menu-btn" href="{{ url_for('master_order_page') }}" target="_self">總單</a>
-    <a class="menu-btn" href="{{ url_for('ship_page') }}" target="_self">出貨</a>
-    <a class="menu-btn" href="{{ url_for('shipping_query_page') }}" target="_self">出貨查詢</a>
-    <a class="menu-btn" href="{{ url_for('warehouse_page') }}" target="_self">倉庫圖</a>
-    <a class="menu-btn" href="{{ url_for('customers_page') }}" target="_self">客戶資料</a>
+  <div id="appShell" class="app-shell hidden">
+    <header class="top-header">
+      <div class="top-line">
+        <div class="top-pill">日期：<span id="todayLabel"></span></div>
+        <div class="top-pill">新增：<span id="summaryAdded">0</span></div>
+        <div class="top-pill">出貨：<span id="summaryShipped">0</span></div>
+        <div class="top-pill alert-pill">未錄入倉庫圖：<span id="summaryUnassigned">0</span></div>
+      </div>
+
+      <div class="header-actions">
+        <button id="settingsBtn" class="btn btn-secondary">設定</button>
+        <button id="todayBtn" class="btn btn-primary">
+          今日異動
+          <span id="todayBadge" class="badge hidden">0</span>
+        </button>
+        <button id="logoutBtn" class="btn btn-secondary">登出</button>
+      </div>
+      <div id="usernameBelow" class="username-below"></div>
+    </header>
+
+    <main class="page-shell">
+      <section id="view-home" class="view active">
+        <div class="hero-card">
+          <div>
+            <div class="eyebrow">工作台</div>
+            <h2>手機現場快速操作</h2>
+            <p>拍照、入庫、訂單、總單、倉庫圖、今日異動一次整合。</p>
+          </div>
+          <button id="installBtn" class="btn btn-secondary">安裝 App</button>
+        </div>
+
+        <div class="home-grid">
+          <button class="nav-card" data-view="orders">
+            <span class="nav-title">訂單</span>
+            <span class="nav-sub">加入訂單、修改、出貨</span>
+          </button>
+          <button class="nav-card" data-view="inventory">
+            <span class="nav-title">庫存</span>
+            <span class="nav-sub">直接查看商品與狀態</span>
+          </button>
+          <button class="nav-card" data-view="master">
+            <span class="nav-title">總單</span>
+            <span class="nav-sub">不顯示客戶名稱</span>
+          </button>
+          <button class="nav-card" data-view="upload">
+            <span class="nav-title">入庫 / 拍照上傳</span>
+            <span class="nav-sub">相簿、拍照、OCR</span>
+          </button>
+          <button class="nav-card" data-view="warehouse">
+            <span class="nav-title">倉庫圖</span>
+            <span class="nav-sub">A/B 區直式定位</span>
+          </button>
+        </div>
+      </section>
+
+      <section id="view-inventory" class="view">
+        <div class="section-header">
+          <div>
+            <h2>庫存</h2>
+            <p>直接顯示商品；未錄入倉庫圖會用紅色提示。</p>
+          </div>
+          <div class="toolbar">
+            <input id="inventorySearch" type="search" placeholder="搜尋商品 / 規格">
+            <button id="inventorySearchClear" class="btn btn-secondary">清除</button>
+          </div>
+        </div>
+        <div id="inventoryList" class="card-list"></div>
+      </section>
+
+      <section id="view-orders" class="view">
+        <div class="section-header">
+          <div>
+            <h2>訂單</h2>
+            <p>可修改、取消、加入總單、出貨、跳轉倉庫圖。</p>
+          </div>
+          <button id="manualOrderBtn" class="btn btn-primary">手動新增訂單</button>
+        </div>
+        <div id="ordersList" class="card-list"></div>
+      </section>
+
+      <section id="view-master" class="view">
+        <div class="section-header">
+          <div>
+            <h2>總單</h2>
+            <p>只顯示整理後商品，不顯示客戶名稱。</p>
+          </div>
+          <button id="addMasterBtn" class="btn btn-primary">手動新增總單</button>
+        </div>
+        <div id="masterList" class="card-list"></div>
+      </section>
+
+      <section id="view-upload" class="view">
+        <div class="section-header">
+          <div>
+            <h2>入庫 / 拍照上傳</h2>
+            <p>先選照片，再框選重要區域，系統優先辨識藍色文字。</p>
+          </div>
+        </div>
+
+        <div class="upload-grid">
+          <div class="upload-card">
+            <div class="toolbar wrap">
+              <label class="btn btn-secondary file-btn">
+                從相簿選圖
+                <input id="albumInput" type="file" accept="image/*">
+              </label>
+              <label class="btn btn-primary file-btn">
+                拍照上傳
+                <input id="cameraInput" type="file" accept="image/*" capture="environment">
+              </label>
+              <button id="ocrRunBtn" class="btn btn-primary">辨識選取區域</button>
+              <button id="ocrResetBtn" class="btn btn-secondary">重設框選</button>
+            </div>
+            <div class="canvas-wrap">
+              <canvas id="ocrCanvas"></canvas>
+            </div>
+            <div class="hint-box">
+              <strong>建議：</strong> 盡量只框到藍色手寫內容。就算信心低，結果也會先寫到下方文字框，仍可手動修改後再送出。
+            </div>
+          </div>
+
+          <div class="upload-card">
+            <div class="form-grid">
+              <label>OCR 結果文字
+                <textarea id="ocrText" rows="8" placeholder="OCR 結果會顯示在這裡，可手動修改"></textarea>
+              </label>
+              <div class="inline-field">
+                <label>信心值
+                  <input id="ocrConfidence" type="text" readonly placeholder="0.00">
+                </label>
+                <label>客戶
+                  <input id="ocrCustomer" type="text" placeholder="客戶名稱">
+                </label>
+              </div>
+              <div class="inline-field">
+                <label>商品
+                  <input id="ocrProduct" type="text" placeholder="商品名稱">
+                </label>
+                <label>規格
+                  <input id="ocrSpec" type="text" placeholder="規格">
+                </label>
+              </div>
+              <div class="inline-field">
+                <label>數量
+                  <input id="ocrQty" type="number" min="0" placeholder="數量">
+                </label>
+                <label>單位
+                  <input id="ocrUnit" type="text" value="件">
+                </label>
+              </div>
+              <label>備註
+                <textarea id="ocrNote" rows="3" placeholder="備註"></textarea>
+              </label>
+              <div id="ocrHints" class="hint-list"></div>
+              <button id="saveInventoryBtn" class="btn btn-primary btn-lg">儲存到庫存</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-warehouse" class="view">
+        <div class="section-header">
+          <div>
+            <h2>倉庫圖</h2>
+            <p>直式 A / B 區，支援點擊查看、拖拉移動、快速高亮定位。</p>
+          </div>
+          <div class="toolbar">
+            <input id="warehouseSearch" type="search" placeholder="搜尋商品或格位">
+            <button id="warehouseSearchClear" class="btn btn-secondary">清除</button>
+            <button id="addSlotBtn" class="btn btn-primary">新增格位</button>
+          </div>
+        </div>
+        <div id="warehouseMap" class="warehouse-map"></div>
+      </section>
+
+      <section id="view-today" class="view">
+        <div class="section-header">
+          <div>
+            <h2>今日異動</h2>
+            <p>只保留新增、出貨量、未錄入倉庫圖。</p>
+          </div>
+        </div>
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-label">新增</div>
+            <div id="todayAdded" class="stat-value">0</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">出貨量</div>
+            <div id="todayShipped" class="stat-value">0</div>
+          </div>
+          <div class="stat-card stat-alert">
+            <div class="stat-label">未錄入倉庫圖</div>
+            <div id="todayUnassigned" class="stat-value">0</div>
+          </div>
+        </div>
+        <div id="unassignedList" class="card-list compact"></div>
+        <div id="activityList" class="card-list"></div>
+      </section>
+
+      <section id="view-settings" class="view">
+        <div class="section-header">
+          <div>
+            <h2>設定</h2>
+            <p>安裝說明、對帳檢視與系統狀態。</p>
+          </div>
+        </div>
+        <div class="settings-grid">
+          <div class="panel-card">
+            <h3>安裝 App</h3>
+            <p>Android：Chrome 右上角選單 → 安裝應用程式。</p>
+            <p>iPhone：Safari 分享 → 加到主畫面。</p>
+          </div>
+          <div class="panel-card">
+            <h3>自動對帳</h3>
+            <button id="loadReconcileBtn" class="btn btn-primary">載入對帳報告</button>
+            <div id="reconcileTable" class="table-wrap"></div>
+          </div>
+        </div>
+      </section>
+    </main>
   </div>
-</div>
-{% endblock %}
+
+  <dialog id="formDialog" class="app-dialog">
+    <form method="dialog" class="dialog-inner" id="dialogForm">
+      <div class="dialog-header">
+        <h3 id="dialogTitle">編輯</h3>
+        <button class="icon-btn" value="cancel">✕</button>
+      </div>
+      <div id="dialogContent" class="dialog-content"></div>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" value="cancel">取消</button>
+        <button id="dialogSubmitBtn" class="btn btn-primary" value="default">儲存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
