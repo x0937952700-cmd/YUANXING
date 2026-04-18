@@ -3,9 +3,9 @@
 <head>
 <meta name="viewport" content="width=device-width">
 <style>
-body{font-family:Arial;background:#eee;text-align:center;}
+body{font-family:Arial;text-align:center;background:#eee;}
 .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:4px;}
-.cell{height:50px;background:#fff;border:1px solid #aaa;}
+.cell{height:60px;background:#fff;border:1px solid #aaa;}
 .drag{background:#6fa8dc;color:#fff;}
 </style>
 </head>
@@ -15,7 +15,7 @@ body{font-family:Arial;background:#eee;text-align:center;}
 <h2>沅興木業 最終版</h2>
 
 <input id="ocr">
-<button onclick="applyOCR()">OCR修正</button>
+<button onclick="apply()">OCR修正</button>
 
 <br><br>
 
@@ -26,13 +26,12 @@ body{font-family:Arial;background:#eee;text-align:center;}
 <div id="w" class="grid"></div>
 
 <script>
+let drag=""
 
-let dragItem=""
-
-function applyOCR(){
+function apply(){
  fetch("/api/ocr_apply?t="+ocr.value)
  .then(r=>r.json())
- .then(d=>ocr.value=d.text)
+ .then(d=>ocr.value=d.t)
 }
 
 function add(){
@@ -48,13 +47,13 @@ function build(){
  for(let i=0;i<120;i++){
   let c=document.createElement("div")
   c.className="cell"
-  c.dataset.loc="L"+i
+  c.dataset.l="L"+i
 
   c.ondrop=(e)=>{
     e.preventDefault()
     fetch("/api/move",{method:"POST",
     headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({p:dragItem,loc:c.dataset.loc})})
+    body:JSON.stringify({p:drag,l:c.dataset.l})})
   }
 
   c.ondragover=(e)=>e.preventDefault()
@@ -63,19 +62,19 @@ function build(){
 }
 
 function load(){
- fetch("/api/warehouse")
+ fetch("/api/w")
  .then(r=>r.json())
  .then(d=>{
   document.querySelectorAll(".cell").forEach(c=>c.innerHTML="")
   d.forEach(i=>{
-    if(i.l){
+    if(i[2]){
       let cell=[...document.querySelectorAll(".cell")]
-      .find(c=>c.dataset.loc===i.l)
+      .find(c=>c.dataset.l===i[2])
 
       if(cell){
         cell.innerHTML=`<div draggable="true"
-        ondragstart="dragItem='${i.p}'"
-        class="drag">${i.p}<br>${i.q}</div>`
+        ondragstart="drag='${i[0]}'"
+        class="drag">${i[0]}<br>${i[1]}</div>`
       }
     }
   })
@@ -84,7 +83,6 @@ function load(){
 
 setInterval(load,2000)
 build()
-
 </script>
 
 </body>
