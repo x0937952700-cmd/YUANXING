@@ -1,34 +1,35 @@
-{% extends "base.html" %}
-{% block body %}
-<div class="home-screen">
-  <div class="hero center">
-    <h1 class="page-title center">沅興木業</h1>
-    <div class="home-info-row">
-      <div class="info-pill">登入者：<strong>{{ username }}</strong></div>
-      <div class="info-pill">日期：<strong id="home-date">{{ today or '' }}</strong></div>
-      <div class="info-pill activity-pill">今日異動：<strong id="home-activity-count">0</strong></div>
-    </div>
-    <div class="home-top-actions">
-      <a class="home-mini-btn" href="{{ url_for('settings_page') }}">設定</a>
-      <a class="home-mini-btn activity-btn" href="{{ url_for('activity_page') }}">
-        <span>今日異動</span>
-        <span id="activity-badge" class="badge hidden">0</span>
-      </a>
-      <button class="home-mini-btn" onclick="logout()">登出</button>
-    </div>
-    <div class="home-user-row">
-      <div class="user-pill">{{ username }}</div>
-    </div>
-  </div>
 
-  <div class="home-menu vertical">
-    <a class="menu-btn" href="{{ url_for('inventory_page') }}" target="_self">庫存</a>
-    <a class="menu-btn" href="{{ url_for('orders_page') }}" target="_self">訂單</a>
-    <a class="menu-btn" href="{{ url_for('master_order_page') }}" target="_self">總單</a>
-    <a class="menu-btn" href="{{ url_for('ship_page') }}" target="_self">出貨</a>
-    <a class="menu-btn" href="{{ url_for('shipping_query_page') }}" target="_self">出貨查詢</a>
-    <a class="menu-btn" href="{{ url_for('warehouse_page') }}" target="_self">倉庫圖</a>
-    <a class="menu-btn" href="{{ url_for('customers_page') }}" target="_self">客戶資料</a>
-  </div>
-</div>
-{% endblock %}
+<h2>白板OCR 90%版</h2>
+
+<input type="file" id="img">
+<button onclick="send()">辨識</button>
+
+<div id="conf"></div>
+<form method="post" action="/add">
+<textarea name="text" id="txt"></textarea>
+<button>加入庫存</button>
+</form>
+
+<ul>
+{% for i in data %}
+<li>{{i}}</li>
+{% endfor %}
+</ul>
+
+<script>
+function send(){
+ let f=document.getElementById("img").files[0]
+ let form=new FormData()
+ form.append("image",f)
+
+ fetch("/upload",{method:"POST",body:form})
+ .then(r=>r.json())
+ .then(d=>{
+  document.getElementById("txt").value=d.text
+  let c=d.confidence||0
+  let color=c>0.8?"green":(c>0.5?"orange":"red")
+  document.getElementById("conf").innerHTML=
+   `<b style="color:${color}">信心:${c}</b>`
+ })
+}
+</script>

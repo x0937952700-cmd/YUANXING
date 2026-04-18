@@ -1,31 +1,87 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 
-  <title>沅興木業</title>
+<title>沅興木業</title>
 
-  <!-- ✅ 修正這裡 -->
-  <link rel="manifest" href="/static/manifest.webmanifest">
+<style>
+body{
+    margin:0;
+    background:#e9e6e1;
+    font-family:Arial, sans-serif;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+}
 
-  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
-  <link rel="icon" href="{{ url_for('static', filename='wood-icon.svg') }}">
+/* ===== 標題 ===== */
+.title{
+    margin-top:40px;
+    font-size:28px;
+    font-weight:bold;
+    color:#333;
+}
 
+/* ===== 容器 ===== */
+.menu{
+    margin-top:30px;
+    width:100%;
+    max-width:400px;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+}
+
+/* ===== 按鈕 ===== */
+.menu-btn{
+    width:85%;
+    padding:20px;
+    margin:12px 0;
+    border:none;
+    border-radius:20px;
+    font-size:22px;
+    background:#f2f2f2;
+    color:#333;
+    box-shadow:0 4px 10px rgba(0,0,0,0.15);
+    transition:0.2s;
+}
+
+.menu-btn:active{
+    transform:scale(0.96);
+    box-shadow:0 2px 5px rgba(0,0,0,0.2);
+}
+</style>
 </head>
 
-<body class="page-enter">
+<body>
 
-<div class="page-shell">
-  {% block content %}{% endblock %}
+<!-- ===== 標題 ===== -->
+<div class="title">沅興木業</div>
+
+<!-- ===== 主選單（直立置中） ===== -->
+<div class="menu">
+
+    <button class="menu-btn" onclick="goPage('inventoryPage')">庫存</button>
+
+    <button class="menu-btn" onclick="goPage('orderPage')">訂單</button>
+
+    <button class="menu-btn" onclick="goPage('masterPage')">總單</button>
+
+    <button class="menu-btn" onclick="goPage('shipPage')">出貨</button>
+
+    <button class="menu-btn" onclick="goPage('warehousePage')">倉庫圖</button>
+
+    <button class="menu-btn" onclick="goPage('customerPage')">客戶資料</button>
+
 </div>
 
-<script src="{{ url_for('static', filename='app.js') }}"></script>
-<script src="{{ url_for('static', filename='main.js') }}"></script>
-
 <script>
-  // 頁面進場動畫（保留你UI效果）
-  document.body.classList.add("page-enter-active");
+function goPage(page){
+    // 這裡接你原本的切頁邏輯
+    console.log("前往:",page);
+}
 </script>
 
 </body>
