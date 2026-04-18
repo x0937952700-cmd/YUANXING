@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify
 import psycopg2, os
 
 app = Flask(__name__)
@@ -8,38 +8,41 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 def get_conn():
     return psycopg2.connect(DATABASE_URL, sslmode='require')
 
-# ===== 初始化 + 自動修復 =====
+# ===== 強制修復 DB =====
 def init_db():
     conn = get_conn()
     c = conn.cursor()
 
-    # 建表（舊的會保留）
+    # 建表（保險）
     c.execute("""
     CREATE TABLE IF NOT EXISTS users(
         id SERIAL PRIMARY KEY,
         username TEXT UNIQUE,
-        password TEXT,
-        role TEXT DEFAULT 'user',
-        is_blocked BOOLEAN DEFAULT FALSE
+        password TEXT
     )
     """)
 
-    # 🔥 補欄位（關鍵）
-    try:
+    # ===== 檢查欄位 =====
+    c.execute("""
+    SELECT column_name FROM information_schema.columns
+    WHERE table_name='users'
+    """)
+    cols = [r[0] for r in c.fetchall()]
+
+    # ===== 補 role =====
+    if "role" not in cols:
         c.execute("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user'")
-    except:
-        pass
 
-    try:
+    # ===== 補 is_blocked =====
+    if "is_blocked" not in cols:
         c.execute("ALTER TABLE users ADD COLUMN is_blocked BOOLEAN DEFAULT FALSE")
-    except:
-        pass
 
-    # 設定預設管理員
+    # ===== 設管理員 =====
     c.execute("""
     INSERT INTO users (username,password,role)
     VALUES ('陳韋廷','1234','admin')
-    ON CONFLICT (username) DO UPDATE SET role='admin'
+    ON CONFLICT (username)
+    DO UPDATE SET role='admin'
     """)
 
     conn.commit()
@@ -71,52 +74,7 @@ def login():
         conn.commit()
         return jsonify({"success":True,"role":"user"})
 
-# ===== 員工列表 =====
-@app.route("/api/users")
-def users():
-    conn = get_conn()
-    c = conn.cursor()
-
-    c.execute("SELECT username,role,is_blocked FROM users ORDER BY role DESC")
-    rows = c.fetchall()
-
-    return jsonify([
-        {"username":r[0],"role":r[1],"is_blocked":r[2]}
-        for r in rows
-    ])
-
-# ===== 封鎖 =====
-@app.route("/api/block", methods=["POST"])
-def block():
-    user = request.json["username"]
-
-    conn = get_conn()
-    c = conn.cursor()
-
-    c.execute("SELECT role FROM users WHERE username=%s",(user,))
-    r = c.fetchone()
-
-    if r and r[0] == "admin":
-        return jsonify({"error":"不能封鎖管理員"})
-
-    c.execute("UPDATE users SET is_blocked=TRUE WHERE username=%s",(user,))
-    conn.commit()
-
-    return jsonify({"success":True})
-
-# ===== 解封 =====
-@app.route("/api/unblock", methods=["POST"])
-def unblock():
-    user = request.json["username"]
-
-    conn = get_conn()
-    c = conn.cursor()
-
-    c.execute("UPDATE users SET is_blocked=FALSE WHERE username=%s",(user,))
-    conn.commit()
-
-    return jsonify({"success":True})
-
+# ===== 測試 =====
 @app.route("/")
 def home():
     return "系統正常運作 ✅"
