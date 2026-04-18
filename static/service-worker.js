@@ -1,5 +1,36 @@
-const CACHE_NAME='yuanxing-cache-v2';
-const URLS_TO_CACHE=['/','/login','/static/styles.css','/static/app.js','/manifest.json'];
-self.addEventListener('install',event=>{event.waitUntil(caches.open(CACHE_NAME).then(cache=>cache.addAll(URLS_TO_CACHE)))});
-self.addEventListener('activate',event=>{event.waitUntil(caches.keys().then(keys=>Promise.all(keys.map(key=>key!==CACHE_NAME?caches.delete(key):null))))});
-self.addEventListener('fetch',event=>{const req=event.request;if(req.method!=='GET') return; event.respondWith(caches.match(req).then(cached=>cached||fetch(req).then(res=>{const copy=res.clone(); caches.open(CACHE_NAME).then(cache=>cache.put(req,copy)).catch(()=>{}); return res;}).catch(()=>cached)))});
+const CACHE_NAME = "static-v2";
+
+const STATIC_ASSETS = [
+  "/static/app.js",
+  "/static/style.css"
+];
+
+self.addEventListener("install", event => {
+  event.waitUntil(
+    caches.open(CACHE_NAME).then(cache => cache.addAll(STATIC_ASSETS))
+  );
+  self.skipWaiting();
+});
+
+self.addEventListener("activate", event => {
+  event.waitUntil(
+    caches.keys().then(keys =>
+      Promise.all(
+        keys.map(key => key !== CACHE_NAME && caches.delete(key))
+      )
+    )
+  );
+  self.clients.claim();
+});
+
+// 🔥 核心：HTML永遠不快取
+self.addEventListener("fetch", event => {
+  if (event.request.headers.get("accept").includes("text/html")) {
+    event.respondWith(fetch(event.request));
+    return;
+  }
+
+  event.respondWith(
+    caches.match(event.request).then(res => res || fetch(event.request))
+  );
+});
