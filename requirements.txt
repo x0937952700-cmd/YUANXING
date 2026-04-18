@@ -1,8 +1,7 @@
-paddleocr
-paddlepaddle
+flask
+psycopg2-binary
+pytesseract
 opencv-python
+easyocr
+pillow
 numpy
-google-cloud-vision
-Flask==3.0.3
-gunicorn==21.2.0
-psycopg2-binary==2.9.9
