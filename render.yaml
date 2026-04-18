@@ -1,11 +1,13 @@
 services:
   - type: web
     name: yuanxing
-    runtime: python
-    plan: free
-    branch: main
-    buildCommand: pip install -r requirements.txt
+    env: python
+    buildCommand: ""
     startCommand: gunicorn app:app
+    plan: free
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.10
+    aptPackages:
+      - tesseract-ocr
+      - tesseract-ocr-chi-tra
