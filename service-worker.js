@@ -1,36 +1,55 @@
+const CACHE_NAME = "static-v1";
 
-const CACHE_NAME = 'yuanxing-cache-v1';
-const URLS_TO_CACHE = [
-  '/',
-  '/login',
-  '/static/style.css?v=5',
-  '/static/app.js?v=9',
-  '/manifest.json',
-  '/static/icons/icon-192.png',
-  '/static/icons/icon-512.png',
-  '/static/icons/icon-180.png',
+// 👉 只快取靜態資源（不要放HTML）
+const STATIC_ASSETS = [
+  "/static/app.js",
+  "/static/style.css",
+  "/static/icons/icon-192.png",
+  "/static/icons/icon-512.png"
 ];
 
-self.addEventListener('install', event => {
+// 安裝
+self.addEventListener("install", event => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => cache.addAll(URLS_TO_CACHE))
+    caches.open(CACHE_NAME).then(cache => {
+      return cache.addAll(STATIC_ASSETS);
+    })
   );
+  self.skipWaiting();
 });
 
-self.addEventListener('activate', event => {
+// 啟用
+self.addEventListener("activate", event => {
   event.waitUntil(
-    caches.keys().then(keys => Promise.all(keys.map(key => key !== CACHE_NAME ? caches.delete(key) : null)))
+    caches.keys().then(keys =>
+      Promise.all(
+        keys.map(key => {
+          if (key !== CACHE_NAME) {
+            return caches.delete(key);
+          }
+        })
+      )
+    )
   );
+  self.clients.claim();
 });
 
-self.addEventListener('fetch', event => {
-  const req = event.request;
-  if (req.method !== 'GET') return;
-  event.respondWith(
-    caches.match(req).then(cached => cached || fetch(req).then(res => {
-      const copy = res.clone();
-      caches.open(CACHE_NAME).then(cache => cache.put(req, copy)).catch(() => {});
-      return res;
-    }).catch(() => cached))
-  );
+// 🔥 核心：Fetch策略
+self.addEventListener("fetch", event => {
+  const url = new URL(event.request.url);
+
+  // ❗ HTML 一律走網路（永遠最新）
+  if (event.request.headers.get("accept").includes("text/html")) {
+    event.respondWith(fetch(event.request));
+    return;
+  }
+
+  // 靜態資源 → cache優先
+  if (url.pathname.startsWith("/static/")) {
+    event.respondWith(
+      caches.match(event.request).then(cached => {
+        return cached || fetch(event.request);
+      })
+    );
+  }
 });
