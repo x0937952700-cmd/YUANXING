@@ -1,89 +1,164 @@
-<h1>TEST 123</h1>
 <!DOCTYPE html>
-<html>
+<html lang="zh-Hant">
 <head>
-<meta name="viewport" content="width=device-width">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<title>沅興木業</title>
+
+<!-- 🔥 防 HTML 快取（關鍵） -->
+<meta http-equiv="Cache-Control" content="no-store">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+
 <style>
-body{font-family:Arial;text-align:center;background:#eee;}
-.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:4px;}
-.cell{height:60px;background:#fff;border:1px solid #aaa;}
-.drag{background:#6fa8dc;color:#fff;}
+body{
+    margin:0;
+    background:#e9e6e1;
+    font-family:Arial, sans-serif;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+}
+
+/* ===== 標題 ===== */
+.title{
+    margin-top:40px;
+    font-size:28px;
+    font-weight:bold;
+    color:#333;
+}
+
+/* ===== 容器 ===== */
+.menu{
+    margin-top:30px;
+    width:100%;
+    max-width:400px;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+}
+
+/* ===== 按鈕 ===== */
+.menu-btn{
+    width:85%;
+    padding:20px;
+    margin:12px 0;
+    border:none;
+    border-radius:20px;
+    font-size:22px;
+    background:#f2f2f2;
+    color:#333;
+    box-shadow:0 4px 10px rgba(0,0,0,0.15);
+    transition:0.2s;
+}
+
+.menu-btn:active{
+    transform:scale(0.96);
+    box-shadow:0 2px 5px rgba(0,0,0,0.2);
+}
 </style>
 </head>
 
 <body>
 
-<h2>沅興木業 最終版</h2>
+<div class="title">沅興木業</div>
 
-<input id="ocr">
-<button onclick="apply()">OCR修正</button>
+<div class="menu">
+    <button class="menu-btn" onclick="goPage('inventory')">庫存</button>
+    <button class="menu-btn" onclick="goPage('orders')">訂單</button>
+    <button class="menu-btn" onclick="goPage('master_order')">總單</button>
+    <button class="menu-btn" onclick="goPage('ship')">出貨</button>
+    <button class="menu-btn" onclick="goPage('warehouse')">倉庫圖</button>
+    <button class="menu-btn" onclick="goPage('customers')">客戶資料</button>
+</div>
 
-<br><br>
-
-<input id="p"><input id="q">
-<button onclick="add()">入庫</button>
-
-<h3>倉庫</h3>
-<div id="w" class="grid"></div>
+<div id="app"></div>
 
 <script>
-let drag=""
-
-function apply(){
- fetch("/api/ocr_apply?t="+ocr.value)
- .then(r=>r.json())
- .then(d=>ocr.value=d.t)
+// ===== 導頁 =====
+function goPage(page){
+    document.getElementById('app').dataset.module = page;
+    location.hash = page;
+    initPage();
 }
 
-function add(){
- fetch("/api/add",{method:"POST",
- headers:{"Content-Type":"application/json"},
- body:JSON.stringify({p:p.value,q:Number(q.value)})})
+// ===== 初始化 =====
+function initPage(){
+    const root=document.getElementById('app');
+    const m=root.dataset.module;
+
+    if(m==='inventory') renderInventory();
+    if(m==='orders') renderOrders();
+    if(m==='master_order') renderMasterOrders();
+    if(m==='ship') renderShip();
+    if(m==='warehouse') renderWarehouse();
+    if(m==='customers') renderCustomers();
+    if(m==='activity') renderActivity();
 }
 
-function build(){
- let w=document.getElementById("w")
- w.innerHTML=""
-
- for(let i=0;i<120;i++){
-  let c=document.createElement("div")
-  c.className="cell"
-  c.dataset.l="L"+i
-
-  c.ondrop=(e)=>{
-    e.preventDefault()
-    fetch("/api/move",{method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({p:drag,l:c.dataset.l})})
-  }
-
-  c.ondragover=(e)=>e.preventDefault()
-  w.appendChild(c)
- }
+// ===== Service Worker（安全版）=====
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/static/service-worker.js")
+      .then(() => console.log("PWA安全模式啟用"))
+      .catch(()=>{});
+  });
 }
 
-function load(){
- fetch("/api/w")
- .then(r=>r.json())
- .then(d=>{
-  document.querySelectorAll(".cell").forEach(c=>c.innerHTML="")
-  d.forEach(i=>{
-    if(i[2]){
-      let cell=[...document.querySelectorAll(".cell")]
-      .find(c=>c.dataset.l===i[2])
+// ===== UI工具 =====
+function card(html){return `<div class="card">${html}</div>`}
 
-      if(cell){
-        cell.innerHTML=`<div draggable="true"
-        ondragstart="drag='${i[0]}'"
-        class="drag">${i[0]}<br>${i[1]}</div>`
-      }
-    }
-  })
- })
+// ===== API功能 =====
+async function renderInventory(){
+ const r=await fetch('/api/inventory'); 
+ const j=await r.json(); 
+ const items=j.items||[];
+
+ document.getElementById('app').innerHTML=card(`
+ <h3>庫存</h3>
+ ${items.map(x=>`
+ <div>
+ <b>${x.product_text}</b> ${x.qty}
+ </div>`).join('')}
+ `);
 }
 
-setInterval(load,2000)
-build()
+async function renderOrders(){
+ const r=await fetch('/api/orders');
+ const j=await r.json();
+ document.getElementById('app').innerHTML=card(`<h3>訂單</h3>`);
+}
+
+async function renderMasterOrders(){
+ const r=await fetch('/api/master_orders');
+ const j=await r.json();
+ document.getElementById('app').innerHTML=card(`<h3>總單</h3>`);
+}
+
+async function renderShip(){
+ document.getElementById('app').innerHTML=card(`<h3>出貨</h3>`);
+}
+
+async function renderCustomers(){
+ const r=await fetch('/api/customers');
+ const j=await r.json();
+ document.getElementById('app').innerHTML=card(`<h3>客戶資料</h3>`);
+}
+
+async function renderWarehouse(){
+ const r=await fetch('/api/warehouse');
+ const j=await r.json();
+ const cells=j.cells||[];
+
+ document.getElementById('app').innerHTML=card(`
+ <h3>倉庫圖</h3>
+ ${cells.map(c=>`
+ <div>${c.zone}${c.column_index}-${c.slot_number}</div>
+ `).join('')}
+ `);
+}
+
 </script>
 
 </body>
