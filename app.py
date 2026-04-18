@@ -7,7 +7,6 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 def get_conn():
     return psycopg2.connect(DATABASE_URL, sslmode='require')
 
-# ===== 初始化 =====
 def init_db():
     conn = get_conn()
     c = conn.cursor()
@@ -27,14 +26,6 @@ def init_db():
     )
     """)
 
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS logs(
-        id SERIAL PRIMARY KEY,
-        action TEXT,
-        time TEXT
-    )
-    """)
-
     conn.commit()
     conn.close()
 
@@ -44,36 +35,30 @@ init_db()
 def home():
     return render_template("index.html")
 
-# ===== OCR學習 =====
+# OCR學習
 @app.route("/api/ocr_learn", methods=["POST"])
 def learn():
     d=request.json
     conn=get_conn();c=conn.cursor()
-
     c.execute("""
     INSERT INTO ocr_fix(wrong,correct)
     VALUES(%s,%s)
     ON CONFLICT (wrong) DO UPDATE SET correct=%s
     """,(d["w"],d["c"],d["c"]))
-
     conn.commit()
     return jsonify({"ok":1})
 
-# ===== OCR套用 =====
+# OCR套用
 @app.route("/api/ocr_apply")
 def apply():
     text=request.args.get("t","")
-
     conn=get_conn();c=conn.cursor()
     c.execute("SELECT wrong,correct FROM ocr_fix")
-    rows=c.fetchall()
-
-    for w,corr in rows:
+    for w,corr in c.fetchall():
         text=text.replace(w,corr)
-
     return jsonify({"text":text})
 
-# ===== 入庫 =====
+# 入庫
 @app.route("/api/add", methods=["POST"])
 def add():
     d=request.json
@@ -91,25 +76,37 @@ def add():
     conn.commit()
     return jsonify({"ok":1})
 
-# ===== 拖拉更新位置 =====
-@app.route("/api/move", methods=["POST"])
-def move():
+# 出貨
+@app.route("/api/ship", methods=["POST"])
+def ship():
     d=request.json
     conn=get_conn();c=conn.cursor()
 
-    c.execute("UPDATE inventory SET location=%s WHERE product=%s",
-              (d["loc"],d["p"]))
+    c.execute("SELECT qty FROM inventory WHERE product=%s FOR UPDATE",(d["p"],))
+    r=c.fetchone()
 
+    if not r or r[0] < d["q"]:
+        return jsonify({"error":"庫存不足"})
+
+    c.execute("UPDATE inventory SET qty=qty-%s WHERE product=%s",(d["q"],d["p"]))
     conn.commit()
     return jsonify({"ok":1})
 
-# ===== 倉庫 =====
+# 倉庫
 @app.route("/api/warehouse")
 def warehouse():
     conn=get_conn();c=conn.cursor()
     c.execute("SELECT product,qty,location FROM inventory")
-    rows=c.fetchall()
-    return jsonify([{"p":r[0],"q":r[1],"l":r[2]} for r in rows])
+    return jsonify([{"p":r[0],"q":r[1],"l":r[2]} for r in c.fetchall()])
+
+# 拖拉
+@app.route("/api/move", methods=["POST"])
+def move():
+    d=request.json
+    conn=get_conn();c=conn.cursor()
+    c.execute("UPDATE inventory SET location=%s WHERE product=%s",(d["loc"],d["p"]))
+    conn.commit()
+    return jsonify({"ok":1})
 
 if __name__=="__main__":
     app.run(host="0.0.0.0",port=10000)
