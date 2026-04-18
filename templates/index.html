@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width">
 
-<title>沅興木業 FINAL</title>
+<title>沅興木業</title>
 
 <style>
 body{
@@ -16,7 +16,7 @@ body{
 
 .title{
     margin-top:20px;
-    font-size:20px;
+    font-size:22px;
     font-weight:bold;
 }
 
@@ -25,7 +25,7 @@ body{
     margin:10px auto;
     padding:15px;
     font-size:18px;
-    border-radius:10px;
+    border-radius:12px;
 }
 
 /* 倉庫 */
@@ -52,51 +52,34 @@ body{
   top:3px;
   left:5px;
 }
-
-.item{
-  margin-top:20px;
-  font-weight:bold;
-}
 </style>
 </head>
 
 <body>
 
-<div class="title">沅興木業 FINAL</div>
+<div class="title">沅興木業</div>
 
 <!-- 七大功能 -->
-<button class="menu-btn" onclick="renderOCR()">📸 OCR</button>
 <button class="menu-btn" onclick="renderInventory()">庫存</button>
 <button class="menu-btn" onclick="renderOrder()">訂單</button>
-<button class="menu-btn" onclick="renderMaster()">總單</button>
 <button class="menu-btn" onclick="renderShip()">出貨</button>
-<button class="menu-btn" onclick="renderWarehouse()">倉庫</button>
-<button class="menu-btn" onclick="renderActivity()">異動</button>
+<button class="menu-btn" onclick="renderShipQuery()">出貨查詢</button>
+<button class="menu-btn" onclick="renderWarehouse()">倉庫圖</button>
+<button class="menu-btn" onclick="renderCustomers()">客戶資料</button>
+<button class="menu-btn" onclick="renderActivity()">異動資料</button>
 
 <hr>
-
 <div id="app"></div>
 
 <script>
 
-// ===== OCR =====
-function renderOCR(){
-  document.getElementById("app").innerHTML = `
-  <h3>OCR 上傳</h3>
-  <input type="file" id="f">
-  <button onclick="upload()">辨識</button>
-  <pre id="r"></pre>`
-}
-
-async function upload(){
-  const f=document.getElementById("f").files[0]
-  const fd=new FormData()
-  fd.append("file",f)
-
-  const r=await fetch('/api/upload_ocr',{method:'POST',body:fd})
-  const j=await r.json()
-
-  document.getElementById("r").textContent=j.text
+// ===== toast =====
+function toast(msg){
+  const t=document.createElement('div')
+  t.innerText=msg
+  t.style="position:fixed;top:20px;right:20px;background:#333;color:#fff;padding:10px;border-radius:8px;"
+  document.body.appendChild(t)
+  setTimeout(()=>t.remove(),2000)
 }
 
 // ===== 庫存 =====
@@ -104,14 +87,13 @@ async function renderInventory(){
   const r=await fetch('/api/inventory')
   const j=await r.json()
 
-  document.getElementById("app").innerHTML =
-    "<h3>庫存</h3>" +
+  app.innerHTML="<h3>庫存</h3>"+
     j.items.map(x=>`<div>${x.p} - ${x.q}</div>`).join("")
 }
 
 // ===== 訂單 =====
 function renderOrder(){
-  document.getElementById("app").innerHTML = `
+  app.innerHTML=`
   <h3>訂單</h3>
   產品<input id="p"><br>
   數量<input id="q"><br>
@@ -129,22 +111,12 @@ async function order(){
   })
 
   const j=await r.json()
-  alert(j.ok?'成功':j.error)
-}
-
-// ===== 總單 =====
-async function renderMaster(){
-  const r=await fetch('/api/orders')
-  const j=await r.json()
-
-  document.getElementById("app").innerHTML =
-    "<h3>總單</h3>" +
-    (j.items||[]).map(x=>`<div>${x.product} ${x.qty}</div>`).join("")
+  toast(j.ok?'成功':j.error)
 }
 
 // ===== 出貨 =====
 function renderShip(){
-  document.getElementById("app").innerHTML = `
+  app.innerHTML=`
   <h3>出貨</h3>
   產品<input id="sp"><br>
   數量<input id="sq"><br>
@@ -152,8 +124,8 @@ function renderShip(){
 }
 
 async function ship(){
-  const p=document.getElementById("sp").value
-  const q=parseInt(document.getElementById("sq").value)
+  const p=sp.value
+  const q=parseInt(sq.value)
 
   const r=await fetch('/api/ship',{
     method:'POST',
@@ -162,70 +134,69 @@ async function ship(){
   })
 
   const j=await r.json()
-  alert(j.ok?'成功':j.error)
+  toast(j.ok?'成功':j.error)
 }
 
-// ===== 倉庫拖拉 =====
-let draggingProduct = null
+// ===== 出貨查詢 =====
+async function renderShipQuery(){
+  const r=await fetch('/api/orders')
+  const j=await r.json()
+
+  app.innerHTML="<h3>出貨查詢</h3>"+
+    j.items.map(x=>`<div>${x.product} - ${x.qty}</div>`).join("")
+}
+
+// ===== 倉庫 =====
+let dragItem=null
 
 async function renderWarehouse(){
+  const r=await fetch('/api/w')
+  const d=await r.json()
 
-  const r = await fetch('/api/w')
-  const data = await r.json()
+  const map={}
+  d.forEach(i=>map[i[2]]=i[0])
 
-  const map = {}
-  data.forEach(i=>{
-    map[i[2]] = i[0]
-  })
-
-  let html = '<h3>倉庫</h3><div class="grid">'
-
+  let html='<div class="grid">'
   for(let i=1;i<=30;i++){
-    const loc = "A-"+i
-    const p = map[loc] || ""
+    const loc="A-"+i
+    const p=map[loc]||""
 
-    html += `
+    html+=`
     <div class="cell ${p?'used':'empty'}"
-         ondragover="allowDrop(event)"
+         ondragover="event.preventDefault()"
          ondrop="drop('${loc}')">
-
-         <div class="loc">${loc}</div>
-
-         <div draggable="true"
-              ondragstart="drag('${p}')"
-              class="item">
-              ${p || ''}
-         </div>
+      <div class="loc">${loc}</div>
+      <div draggable="true" ondragstart="drag('${p}')">${p}</div>
     </div>`
   }
 
-  html += '</div>'
-
-  document.getElementById("app").innerHTML = html
+  html+='</div>'
+  app.innerHTML=html
 }
 
-function drag(p){
-  draggingProduct = p
-}
+function drag(p){dragItem=p}
 
 async function drop(loc){
-  if(!draggingProduct) return
+  if(!dragItem)return
 
   await fetch('/api/move',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({
-      p: draggingProduct,
-      l: loc
-    })
+    body:JSON.stringify({p:dragItem,l:loc})
   })
 
-  draggingProduct = null
+  toast("已移動")
+  dragItem=null
   renderWarehouse()
 }
 
-function allowDrop(e){
-  e.preventDefault()
+// ===== 客戶 =====
+async function renderCustomers(){
+  const r=await fetch('/api/customers')
+  const j=await r.json()
+
+  app.innerHTML="<h3>客戶資料</h3>"+
+    j.items.map(x=>`<div>${x.name}</div>`).join("")
 }
 
 // ===== 異動 =====
@@ -233,10 +204,14 @@ async function renderActivity(){
   const r=await fetch('/api/activity')
   const j=await r.json()
 
-  document.getElementById("app").innerHTML =
-    "<h3>異動紀錄</h3>" +
-    j.items.map(x=>`<div>${x.a} ${x.t}</div>`).join("")
+  app.innerHTML="<h3>異動資料</h3>"+
+    j.items.map(x=>`<div>👤${x.user}｜${x.action}</div>`).join("")
 }
+
+// ===== 即時更新 =====
+setInterval(()=>{
+  renderInventory()
+},5000)
 
 </script>
 
