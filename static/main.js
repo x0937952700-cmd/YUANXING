@@ -1,50 +1,27 @@
-async function renderWarehouse(){
-  const r = await fetch('/api/w');
-  const data = await r.json();
+async function autoUpload(){
 
-  let html = '<div class="grid">';
+  const f = document.getElementById('file').files[0];
+  if(!f) return alert("請選圖片");
 
-  data.forEach(i=>{
-    html += `<div class="cell ${i[2]?'used':'empty'}"
-      draggable="true"
-      ondragstart="drag(event,'${i[0]}')"
-      onclick="focusItem('${i[0]}')">
-      ${i[0]}<br>${i[2]||'未放置'}
-    </div>`;
-  });
+  const fd = new FormData();
+  fd.append("file", f);
 
-  html+='</div>';
-  document.getElementById('app').innerHTML=html;
-}
-
-function drag(ev,p){
-  ev.dataTransfer.setData("p",p);
-}
-
-async function drop(loc){
-  const p = event.dataTransfer.getData("p");
-
-  await fetch('/api/move',{
+  const r = await fetch('/api/auto_ocr',{
     method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({p:p,l:loc})
+    body:fd
   });
 
-  renderWarehouse();
-}
+  const j = await r.json();
 
-async function focusItem(p){
-  const cells = document.querySelectorAll('.cell');
-  cells.forEach(c=>c.classList.remove('highlight'));
+  document.getElementById("result").innerHTML = `
+    <h3>辨識結果</h3>
+    <pre>${j.text}</pre>
 
-  const target = [...cells].find(c=>c.innerText.includes(p));
-  if(target){
-    target.classList.add('highlight');
-
-    let i=0;
-    const t=setInterval(()=>{
-      target.classList.toggle('blink');
-      if(i++>5) clearInterval(t);
-    },300);
-  }
+    <h3>自動入庫</h3>
+    ${j.result.map(x=>`
+      <div>
+        ${x.product} → ${x.qty}件 → 📍${x.location}
+      </div>
+    `).join("")}
+  `;
 }
