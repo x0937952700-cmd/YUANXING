@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify
 import psycopg2, os
 
 app = Flask(__name__)
@@ -7,9 +7,10 @@ DB = os.environ.get("DATABASE_URL")
 def conn():
     return psycopg2.connect(DB, sslmode='require')
 
+# 🚨 測試首頁（關鍵）
 @app.route("/")
 def home():
-    return render_template("index.html")
+    return "<h1 style='color:red;'>我是不是新的</h1>"
 
 # OCR學習
 @app.route("/api/ocr_learn", methods=["POST"])
@@ -73,4 +74,5 @@ def w():
     cur.execute("SELECT p,q,l FROM inv")
     return jsonify(cur.fetchall())
 
-app.run(host="0.0.0.0",port=10000)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0",port=10000)
