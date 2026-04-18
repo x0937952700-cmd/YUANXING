@@ -1,1 +1,35 @@
-<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>沅興木業</title><link rel="manifest" href="/manifest.json"><link rel="stylesheet" href="/static/styles.css"></head><body><div class="topbar"><div>登入：{{ username }}</div><div>{{ today }}</div><div id="summary-inline">今日異動</div></div><div class="actions-row"><a class="small-btn" href="/settings">設定</a><a class="small-btn badge-wrap" href="/activity">今日異動<span id="badge" class="badge">0</span></a><button class="small-btn" onclick="logout()">登出</button></div><div class="username-under">{{ username }}</div><div class="grid-menu"><a class="menu-card" href="/orders">訂單</a><a class="menu-card" href="/inventory">庫存</a><a class="menu-card" href="/master-order">總單</a><a class="menu-card" href="/ship">出貨</a><a class="menu-card" href="/warehouse">倉庫圖</a><a class="menu-card" href="/customers">客戶資料</a></div><script src="/static/app.js"></script></body></html>
+
+<h2>白板OCR 90%版</h2>
+
+<input type="file" id="img">
+<button onclick="send()">辨識</button>
+
+<div id="conf"></div>
+<form method="post" action="/add">
+<textarea name="text" id="txt"></textarea>
+<button>加入庫存</button>
+</form>
+
+<ul>
+{% for i in data %}
+<li>{{i}}</li>
+{% endfor %}
+</ul>
+
+<script>
+function send(){
+ let f=document.getElementById("img").files[0]
+ let form=new FormData()
+ form.append("image",f)
+
+ fetch("/upload",{method:"POST",body:form})
+ .then(r=>r.json())
+ .then(d=>{
+  document.getElementById("txt").value=d.text
+  let c=d.confidence||0
+  let color=c>0.8?"green":(c>0.5?"orange":"red")
+  document.getElementById("conf").innerHTML=
+   `<b style="color:${color}">信心:${c}</b>`
+ })
+}
+</script>
