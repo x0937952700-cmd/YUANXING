@@ -5,13 +5,11 @@ services:
     plan: free
     branch: main
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --worker-class eventlet -w 1 app:app
+    startCommand: gunicorn app:app
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.10
       - key: SECRET_KEY
         generateValue: true
-      - key: DEFAULT_ADMIN_USERNAME
-        value: admin
-      - key: DEFAULT_ADMIN_PASSWORD
-        value: admin1234
+      - key: OCR_SPACE_API_KEY
+        sync: false
