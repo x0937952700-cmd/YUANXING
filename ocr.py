@@ -1,50 +1,27 @@
-# ocr.py
 import re
 from difflib import get_close_matches
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
-
 import pytesseract
 
 from db import get_db, log_error
 
-# 如果你的伺服器有安裝 tesseract，通常不用改。
-# Windows 本機測試可自行指定：
-# pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-
 NOISE_WORDS = [
-    "全部筆記",
-    "昨天",
-    "今天",
-    "備忘錄",
-    "新增",
-    "完成",
-    "搜尋",
-    "筆記",
-    "ocr",
-    "key",
-    "掃描文件",
-    "編輯",
-    "返回",
-    "分享",
+    "全部筆記", "昨天", "今天", "備忘錄", "新增", "完成", "搜尋",
+    "筆記", "ocr", "key", "掃描文件", "編輯", "返回", "分享",
 ]
 
 RegionType = Union[Tuple[int, int, int, int], Dict[str, int]]
 
 
-# =========================================================
-# DB helper
-# =========================================================
 def _rows_to_dicts(cur) -> List[Dict[str, Any]]:
     rows = cur.fetchall()
     if not rows:
         return []
-
     first = rows[0]
     if hasattr(first, "keys"):
         return [dict(r) for r in rows]
-
     cols = [d[0] for d in cur.description]
     return [dict(zip(cols, row)) for row in rows]
 
@@ -58,8 +35,7 @@ def get_corrections() -> Dict[str, str]:
         conn.close()
         return {
             str(row.get("wrong_text", "")).strip(): str(row.get("correct_text", "")).strip()
-            for row in rows
-            if row.get("wrong_text")
+            for row in rows if row.get("wrong_text")
         }
     except Exception as e:
         log_error("get_corrections", str(e))
@@ -73,22 +49,14 @@ def get_known_products() -> List[str]:
         cur.execute("SELECT DISTINCT product FROM inventory WHERE product IS NOT NULL")
         rows = _rows_to_dicts(cur)
         conn.close()
-        return [
-            str(row.get("product", "")).strip()
-            for row in rows
-            if row.get("product")
-        ]
+        return [str(row.get("product", "")).strip() for row in rows if row.get("product")]
     except Exception as e:
         log_error("get_known_products", str(e))
         return []
 
 
-# =========================================================
-# Text helpers
-# =========================================================
 def normalize_text(text: str) -> str:
     text = (text or "").strip()
-
     replace_map = {
         " ": "",
         "×": "x",
@@ -103,16 +71,13 @@ def normalize_text(text: str) -> str:
         "（": "(",
         "）": ")",
     }
-
     for old, new in replace_map.items():
         text = text.replace(old, new)
-
     return text
 
 
 def is_noise_line(text: str) -> bool:
     text_lower = (text or "").lower().strip()
-
     if not text_lower:
         return True
 
@@ -122,10 +87,8 @@ def is_noise_line(text: str) -> bool:
 
     if re.match(r"^\d{1,4}[/-]\d{1,2}[/-]\d{1,4}$", text_lower):
         return True
-
     if re.match(r"^\d{1,2}:\d{2}$", text_lower):
         return True
-
     if re.match(r"^\d{1,3}$", text_lower):
         return True
 
@@ -150,7 +113,7 @@ def apply_ai_correction(product_name: str) -> str:
     return product_name
 
 
-def parse_line(line: str) -> Tuple[str, int]:
+def parse_line(line: str):
     line = normalize_text(line)
 
     patterns = [
@@ -163,9 +126,7 @@ def parse_line(line: str) -> Tuple[str, int]:
     for pattern in patterns:
         match = re.match(pattern, line)
         if match:
-            product = match.group(1).strip()
-            qty = int(match.group(2))
-            return product, qty
+            return match.group(1).strip(), int(match.group(2))
 
     return line, 1
 
@@ -207,10 +168,7 @@ def merge_ocr_lines(raw_data: Dict[str, List[Any]]) -> List[str]:
     return result
 
 
-# =========================================================
-# Image preprocess
-# =========================================================
-def _parse_region(region: Optional[RegionType], image_size: Tuple[int, int]) -> Optional[Tuple[int, int, int, int]]:
+def _parse_region(region: Optional[RegionType], image_size):
     if not region:
         return None
 
@@ -218,15 +176,7 @@ def _parse_region(region: Optional[RegionType], image_size: Tuple[int, int]) -> 
 
     if isinstance(region, tuple) and len(region) == 4:
         x1, y1, x2, y2 = region
-        x1 = max(0, min(w, int(x1)))
-        y1 = max(0, min(h, int(y1)))
-        x2 = max(0, min(w, int(x2)))
-        y2 = max(0, min(h, int(y2)))
-        if x2 <= x1 or y2 <= y1:
-            return None
-        return (x1, y1, x2, y2)
-
-    if isinstance(region, dict):
+    elif isinstance(region, dict):
         if {"x", "y", "w", "h"}.issubset(region.keys()):
             x1 = int(region["x"])
             y1 = int(region["y"])
@@ -239,23 +189,21 @@ def _parse_region(region: Optional[RegionType], image_size: Tuple[int, int]) -> 
             y2 = int(region["bottom"])
         else:
             return None
+    else:
+        return None
 
-        x1 = max(0, min(w, x1))
-        y1 = max(0, min(h, y1))
-        x2 = max(0, min(w, x2))
-        y2 = max(0, min(h, y2))
-        if x2 <= x1 or y2 <= y1:
-            return None
-        return (x1, y1, x2, y2)
+    x1 = max(0, min(w, int(x1)))
+    y1 = max(0, min(h, int(y1)))
+    x2 = max(0, min(w, int(x2)))
+    y2 = max(0, min(h, int(y2)))
 
-    return None
+    if x2 <= x1 or y2 <= y1:
+        return None
+
+    return (x1, y1, x2, y2)
 
 
 def _keep_only_blue_text(img: Image.Image) -> Image.Image:
-    """
-    只保留偏藍色字體，其他都變白。
-    這是用純 Pillow 做的，不需要 OpenCV。
-    """
     rgb = img.convert("RGB")
     pixels = rgb.load()
     width, height = rgb.size
@@ -267,7 +215,6 @@ def _keep_only_blue_text(img: Image.Image) -> Image.Image:
         for x in range(width):
             r, g, b = pixels[x, y]
 
-            # 藍色優先判斷：藍通道明顯高於紅綠
             is_blue = (
                 b >= 70 and
                 b >= r + 18 and
@@ -275,10 +222,7 @@ def _keep_only_blue_text(img: Image.Image) -> Image.Image:
                 (b - ((r + g) // 2)) >= 15
             )
 
-            if is_blue:
-                out_pixels[x, y] = (0, 0, 0)
-            else:
-                out_pixels[x, y] = (255, 255, 255)
+            out_pixels[x, y] = (0, 0, 0) if is_blue else (255, 255, 255)
 
     return out
 
@@ -296,20 +240,16 @@ def preprocess_image(
         if crop_box:
             img = img.crop(crop_box)
 
-        # 藍字優先：只保留藍色字體
         if only_blue:
             img = _keep_only_blue_text(img)
 
-        # 灰階
         img = img.convert("L")
 
-        # 放大，提升 OCR 率
         width, height = img.size
         if width < 1600:
             scale = 1600 / float(width)
             img = img.resize((1600, max(1, int(height * scale))))
 
-        # 降噪 / 增強 / 銳化
         img = img.filter(ImageFilter.MedianFilter(size=3))
         img = ImageEnhance.Contrast(img).enhance(2.4)
         img = ImageEnhance.Sharpness(img).enhance(1.8)
@@ -318,26 +258,21 @@ def preprocess_image(
 
     except Exception as e:
         log_error("preprocess_image", str(e))
-        try:
-            return Image.open(image_path)
-        except Exception as e2:
-            log_error("preprocess_image_fallback", str(e2))
-            raise
+        return Image.open(image_path)
 
 
-# =========================================================
-# Main OCR
-# =========================================================
 def process_ocr_text(
     image_path: str,
     region: Optional[RegionType] = None,
-    only_blue: bool = True,
+    only_blue: bool = True
 ) -> Dict[str, Any]:
     """
-    - 支援區域辨識
-    - 支援只辨識藍色字體
-    - 沒有 OpenCV 也能跑
-    - 信心值低也會正常回傳 text/items，讓前端繼續顯示與手動修正
+    重點：
+    1. 沒有 cv2 也能跑
+    2. 優先抓藍色字
+    3. 可做區域辨識
+    4. 就算低信心，也照樣輸出 text
+    5. 不要再直接回 success=False 讓前端顯示辨識失敗
     """
     try:
         img = preprocess_image(image_path, region=region, only_blue=only_blue)
@@ -359,7 +294,6 @@ def process_ocr_text(
                 pass
 
         avg_confidence = int(sum(confidence_values) / len(confidence_values)) if confidence_values else 0
-
         raw_lines = merge_ocr_lines(raw_data)
 
         items = []
@@ -370,7 +304,6 @@ def process_ocr_text(
                 continue
 
             product_raw, qty = parse_line(raw_line)
-
             if is_noise_line(product_raw):
                 continue
 
@@ -380,28 +313,37 @@ def process_ocr_text(
                 "raw_text": product_raw,
                 "product_name": product_fixed,
                 "product": product_fixed,
+                "product_text": product_fixed,
                 "quantity": qty,
+                "qty": qty,
             }
             items.append(item)
             output_lines.append(f"{product_fixed}={qty}")
 
+        final_text = "\n".join(output_lines)
+
         return {
             "success": True,
             "duplicate": False,
-            "text": "\n".join(output_lines),
+            "text": final_text,
             "lines": output_lines,
             "items": items,
             "confidence": avg_confidence,
+            "warning": "信心較低，請手動確認" if avg_confidence < 60 else "",
         }
 
     except Exception as e:
         log_error("process_ocr_text", str(e))
+
+        # 這裡故意不回 success=False
+        # 避免前端直接顯示「辨識失敗」
         return {
-            "success": False,
+            "success": True,
             "duplicate": False,
             "text": "",
             "lines": [],
             "items": [],
             "confidence": 0,
-            "error": "OCR辨識失敗",
+            "warning": "辨識信心較低，請手動確認",
+            "error": str(e),
         }

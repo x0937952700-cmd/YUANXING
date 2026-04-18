@@ -1,80 +1,23 @@
-
 <!doctype html>
 <html lang="zh-Hant">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#f4f1ea">
+  <meta name="theme-color" content="#f3f0e8">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="apple-mobile-web-app-title" content="沅興木業">
+  <link rel="manifest" href="{{ url_for('manifest') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <title>{{ title or '沅興木業' }}</title>
-  <link rel="manifest" href="/manifest.json">
-  <link rel="apple-touch-icon" href="/static/icons/icon-180.png">
-  <link rel="icon" href="/static/icons/icon-192.png">
-  <link rel="stylesheet" href="/static/style.css?v=5">
+  {% block extra_head %}{% endblock %}
 </head>
 <body>
-  <div class="toast-container" id="toastContainer"></div>
-
-  <div class="topbar">
-    <div class="topbar-inner">
-      <div class="brand" onclick="window.location.href='/'" style="cursor:pointer">
-        <div class="brand-mark">木</div>
-        <div class="brand-title">
-          <div>沅興木業</div>
-          <small>{{ title_sub or 'AI OCR 智慧倉庫系統' }}</small>
-        </div>
-      </div>
-
-      <div class="top-actions">
-        {% if user %}
-        <div class="fixed-top-info">
-          <span class="pill primary">登入：{{ user }}</span>
-          <span class="pill">今日異動：<span id="todayBadge" class="badge">{{ unread_count or 0 }}</span></span>
-          <span class="pill">{{ now or '' }}</span>
-        </div>
-        {% endif %}
-        {% block top_actions %}{% endblock %}
-      </div>
-    </div>
+  <div class="page-shell">
+    {% block body %}{% endblock %}
   </div>
-
-  {% block body %}{% endblock %}
-
-  <div class="modal-backdrop" id="modalBackdrop">
-    <div class="modal" id="modalBox">
-      <div class="modal-header">
-        <strong id="modalTitle">編輯</strong>
-        <button class="ghost" onclick="App.closeModal()">關閉</button>
-      </div>
-      <div id="modalContent"></div>
-    </div>
-  </div>
-
-  <script>
-    window.APP_CONFIG = {
-      user: {{ user|tojson if user is defined else 'null' }},
-      module: {{ module|tojson if module is defined else 'null' }},
-      unreadCount: {{ unread_count|default(0)|tojson }},
-      title: {{ title|default('沅興木業')|tojson }},
-      summary: {{ data.summary|default({})|tojson if data is defined else '{}' }},
-      inventory: {{ data.inventory|default([])|tojson if data is defined else '[]' }},
-      orders: {{ data.orders|default([])|tojson if data is defined else '[]' }},
-      masters: {{ data.master_orders|default([])|tojson if data is defined else '[]' }},
-      shippingRecords: {{ data.shipping_records|default([])|tojson if data is defined else '[]' }},
-      customers: {{ data.customers|default([])|tojson if data is defined else '[]' }},
-      warehouseA: {{ data.warehouse_a|default([])|tojson if data is defined else '[]' }},
-      warehouseB: {{ data.warehouse_b|default([])|tojson if data is defined else '[]' }},
-      notifications: {{ data.notifications|default([])|tojson if data is defined else '[]' }},
-      logs: {{ data.logs|default([])|tojson if data is defined else '[]' }},
-      discrepancies: {{ data.discrepancies|default([])|tojson if data is defined else '[]' }},
-      backups: {{ data.backups|default([])|tojson if data is defined else '[]' }},
-      settings: {{ data.settings|default([])|tojson if data is defined else '[]' }},
-      unplacedItems: {{ data.summary.unplaced_items|default([])|tojson if data is defined else '[]' }},
-      errors: {{ data.errors|default([])|tojson if data is defined else '[]' }},
-    };
-  </script>
-  <script src="/static/app.js?v=9"></script>
+  <div id="toast" class="toast" aria-live="polite"></div>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+  {% block extra_scripts %}{% endblock %}
 </body>
 </html>

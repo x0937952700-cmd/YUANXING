@@ -1,262 +1,153 @@
-
 {% extends "base.html" %}
-{% block top_actions %}
-  <a class="pill primary" href="/">回首頁</a>
-  <a class="pill" href="/module/today">今日異動{% if unread_count %}<span class="badge" style="margin-left:8px">{{ unread_count }}</span>{% endif %}</a>
-{% endblock %}
 {% block body %}
-<div class="page">
-  <div class="container">
+<div class="module-screen">
 
-    {% if module in ['inventory','orders','master_orders','shipping'] %}
-    <div class="section">
-      <div class="toolbar">
-        <div>
-          <h2 style="margin:0">{{ {'inventory':'庫存','orders':'訂單','master_orders':'總單','shipping':'出貨'}[module] }}</h2>
-          <div class="muted small">上傳後可直接把藍色字體辨識結果放到下方文字欄，低信心值也會照樣輸出。</div>
-        </div>
-        <div class="upload-panel">
-          <div class="upload-buttons">
-            <button class="icon-btn primary" onclick="App.pickFile('{{module}}')">上傳檔案</button>
-            <button class="icon-btn primary" onclick="App.triggerCamera('{{module}}')">相簿 / 拍照</button>
-            <span class="confidence"><strong>信心值</strong><span id="{{module}}Confidence">--</span></span>
-          </div>
-        </div>
-      </div>
-      <input type="file" id="{{module}}File" accept="image/*" capture="environment" class="hidden" onchange="App.handleUpload('{{module}}', this)">
-      {% if module == 'inventory' %}
-      <div style="margin-top:14px">
-        <div class="label">OCR 辨識文字</div>
-        <textarea id="{{module}}OcrText" placeholder="辨識結果會直接出現在這裡，可手動修改"></textarea>
-        <div class="helper">只識別藍色字體、忽略多餘部分、保留低信心值結果供人工修正。</div>
-      </div>
-      {% else %}
-      <div class="grid2" style="margin-top:14px">
-        <div>
-          <div class="label">OCR 辨識文字</div>
-          <textarea id="{{module}}OcrText" placeholder="辨識結果會直接出現在這裡，可手動修改"></textarea>
-          <div class="helper">只識別藍色字體、忽略多餘部分、保留低信心值結果供人工修正。</div>
-        </div>
-        <div>
-          <div class="label">客戶名稱</div>
-          <div class="autocomplete">
-            <input class="input" id="{{module}}Customer" placeholder="輸入關鍵字直接跳出完整客戶名" oninput="App.searchCustomers(this.value, '{{module}}')" autocomplete="off">
-            <div id="{{module}}CustomerSug" class="suggestions"></div>
-          </div>
-          <div class="helper">總單頁不顯示客戶名稱列表，但仍可透過搜尋選入。</div>
-          <div style="height:10px"></div>
-          <div class="label">客戶分類</div>
-          <div id="{{module}}CustomerChips" class="chips"></div>
-        </div>
-      </div>
-      {% endif %}
-      <div class="modal-actions" style="margin-top:16px">
-        <button class="primary" onclick="App.submitModule('{{module}}')">確認送出</button>
-        <button class="ghost" onclick="App.learnCorrection('{{module}}')">AI 記憶修正</button>
-      </div>
+  <!-- 上方 -->
+  <div class="module-topbar">
+    <a class="back-btn" href="{{ url_for('home') }}">← 回首頁</a>
+    <div class="module-title">{{ title }}</div>
+    <div></div>
+  </div>
 
-      <button class="icon-btn camera" style="display:flex" onclick="App.triggerCamera('{{module}}')">📷</button>
+  <!-- ========= OCR 區 ========= -->
+  {% if module_key in ['inventory','orders','master_order','ship'] %}
+  <div class="glass panel upload-panel">
+
+    <div class="upload-row">
+      <button class="primary-btn" onclick="openAlbumPicker()">上傳 / 相簿</button>
+      <span class="confidence-mini" id="ocr-confidence-pill">0%</span>
     </div>
+
+    <!-- 📷 拍照按鈕 -->
+    <button class="camera-fab" onclick="openCameraPicker()">📷</button>
+
+    <input id="album-input" type="file" accept="image/*" class="hidden">
+    <input id="camera-input" type="file" accept="image/*" capture="environment" class="hidden">
+
+    <!-- OCR結果 -->
+    <textarea id="ocr-text" class="text-area" placeholder="辨識結果會直接出現在這裡（可手動修改）"></textarea>
+
+    <!-- 客戶（庫存不顯示） -->
+    {% if module_key != 'inventory' %}
+    <input id="customer-name" class="text-input" placeholder="輸入客戶名稱（支援搜尋）">
     {% endif %}
 
-    {% if module == 'inventory' %}
-      <div class="section">
-        <div class="toolbar">
-          <h2>庫存商品</h2>
-          <input class="input" style="max-width:320px" id="inventorySearch" placeholder="搜尋商品或格位" oninput="App.filterInventory(this.value)">
-        </div>
-        <div class="table-wrap" style="margin-top:12px">
-          <table>
-            <thead><tr><th>商品</th><th>數量</th><th>格位</th><th>客戶</th><th>狀態</th></tr></thead>
-            <tbody id="inventoryTable"></tbody>
-          </table>
-        </div>
-      </div>
-    {% endif %}
+    <input id="location-input" class="text-input" placeholder="倉庫位置">
 
-    {% if module == 'orders' %}
-      <div class="section">
-        <h2>訂單資料</h2>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>客戶</th><th>商品</th><th>數量</th><th>狀態</th><th>時間</th></tr></thead>
-            <tbody id="ordersTable"></tbody>
-          </table>
-        </div>
-      </div>
-    {% endif %}
-
-    {% if module == 'master_orders' %}
-      <div class="section">
-        <h2>總單資料</h2>
-        <div class="note-box">總單頁不直接顯示客戶名稱清單；需要時可用上方搜尋欄查找與編輯。</div>
-        <div class="table-wrap" style="margin-top:12px">
-          <table>
-            <thead><tr><th>商品</th><th>數量</th><th>更新時間</th></tr></thead>
-            <tbody id="mastersTable"></tbody>
-          </table>
-        </div>
-      </div>
-    {% endif %}
-
-    {% if module == 'shipping' %}
-      <div class="section">
-        <h2>出貨確認</h2>
-        <div class="grid2">
-          <div class="card soft">
-            <div class="label">出貨前再次確認</div>
-            <div id="shipSummary" class="list"></div>
-          </div>
-          <div class="card soft">
-            <div class="label">自動對帳結果</div>
-            <div id="reconcilePanel" class="list"></div>
-          </div>
-        </div>
-      </div>
-    {% endif %}
-
-    {% if module == 'shipping_records' %}
-      <div class="section">
-        <div class="toolbar">
-          <h2>出貨查詢</h2>
-          <div class="chips">
-            <button class="chip" onclick="App.filterShipDays(3)">3天</button>
-            <button class="chip" onclick="App.filterShipDays(7)">7天</button>
-            <button class="chip" onclick="App.filterShipDays(10)">10天</button>
-            <button class="chip" onclick="App.filterShipDays(15)">15天</button>
-          </div>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>客戶</th><th>商品</th><th>數量</th><th>操作人員</th><th>出貨時間</th><th>明細</th></tr></thead>
-            <tbody id="shippingRecordsTable"></tbody>
-          </table>
-        </div>
-      </div>
-    {% endif %}
-
-    {% if module == 'customers' %}
-      <div class="section">
-        <div class="toolbar">
-          <h2>客戶資料</h2>
-          <div class="note-box">沒有獨立新增按鈕；客戶會由訂單、總單自動同步到此處，並可直接手動編輯。</div>
-        </div>
-        <div class="table-wrap" style="margin-top:12px">
-          <table>
-            <thead><tr><th>客戶名稱</th><th>電話</th><th>地址</th><th>特殊要求</th><th>區域</th><th>操作</th></tr></thead>
-            <tbody id="customersTable"></tbody>
-          </table>
-        </div>
-      </div>
-    {% endif %}
-
-    {% if module == 'warehouse' %}
-      <div class="section">
-        <div class="toolbar">
-          <h2>倉庫圖</h2>
-          <div class="zone-switch">
-            <button class="chip active" id="zoneBtnA" onclick="App.showZone('A')">A倉</button>
-            <button class="chip" id="zoneBtnB" onclick="App.showZone('B')">B倉</button>
-          </div>
-        </div>
-        <div class="grid-actions">
-          <input class="input" style="max-width:320px" id="warehouseSearch" placeholder="輸入 113 直接跳出商品">
-          <button class="primary" onclick="App.searchWarehouse()">搜尋</button>
-          <button class="ghost" onclick="App.toggleWarehouseView()">檢視 / 編輯</button>
-        </div>
-        <div class="grid-actions">
-          <span class="small-pill">拖曳格位可移動</span>
-          <span class="small-pill">點格子可編輯</span>
-          <span class="small-pill">下拉可直接選已錄入項目</span>
-        </div>
-        <div style="height:16px"></div>
-        <div id="warehouseZones">
-          <div id="zoneA" class="warehouse-zone active"></div>
-          <div id="zoneB" class="warehouse-zone"></div>
-        </div>
-        <div class="section" style="margin-top:18px">
-          <div class="toolbar">
-            <h2>未上架商品</h2>
-            <div class="muted">尚未添加到倉庫圖位置的商品會以紅字標示。</div>
-          </div>
-          <div id="unplacedList" class="list"></div>
-        </div>
-      </div>
-    {% endif %}
-
-    {% if module == 'today' %}
-      <div class="section">
-        <div class="toolbar">
-          <h2>今日異動</h2>
-          <button class="ghost" onclick="App.markNotificationsRead()">全部已讀</button>
-        </div>
-        <div class="grid3" id="todayStats"></div>
-      </div>
-
-      <div class="section">
-        <h2>通知列表</h2>
-        <div id="notificationsList" class="list"></div>
-      </div>
-
-      <div class="section">
-        <h2>操作歷史</h2>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>誰</th><th>時間</th><th>做什麼</th><th>影響項目</th><th>內容</th></tr></thead>
-            <tbody id="logsTable"></tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="section">
-        <h2>自動對帳</h2>
-        <div id="reconcileList" class="list"></div>
-      </div>
-    {% endif %}
-
-    {% if module == 'settings' %}
-      <div class="section">
-        <h2>設定 / 改密碼</h2>
-        <div class="grid2">
-          <div class="card">
-            <div class="label">舊密碼</div>
-            <input class="input" id="oldPassword" type="password">
-            <div style="height:10px"></div>
-            <div class="label">新密碼</div>
-            <input class="input" id="newPassword" type="password">
-            <div style="height:10px"></div>
-            <div class="label">確認新密碼</div>
-            <input class="input" id="confirmPassword" type="password">
-            <div class="modal-actions">
-              <button class="primary" onclick="App.changePassword()">確認修改</button>
-            </div>
-          </div>
-          <div class="card">
-            <h3 style="margin-top:0">其他設定</h3>
-            <div class="note-box">首頁只保留設定與登出，其餘頁面不顯示。此區可再擴充 API Key、資料庫與通知設定。</div>
-            <div style="height:12px"></div>
-            <div class="list" id="settingsList"></div>
-          </div>
-        </div>
-      </div>
-    {% endif %}
-
-    {% if module == 'reconcile' %}
-      <div class="section">
-        <h2>自動對帳</h2>
-        <div class="note-box">訂單、總單、出貨、庫存互相比對，抓出差異。</div>
-        <div id="reconcileList2" class="list" style="margin-top:12px"></div>
-      </div>
-    {% endif %}
-
-    {% if module in ['inventory','orders','master_orders','shipping'] %}
-      <div class="section">
-        <h2>OCR / 送出內容預覽</h2>
-        <div class="note-box">修改後的內容會先輸出到下方文字欄，再由你手動確認送出；信心值小字顯示在拍照按鈕旁邊。</div>
-        <div id="{{module}}Preview" class="list"></div>
-      </div>
-    {% endif %}
+    <div class="btn-row">
+      <button class="primary-btn" onclick="confirmSubmit()">送出</button>
+    </div>
 
   </div>
+  {% endif %}
+
+  <!-- ========= 今日異動 ========= -->
+  {% if module_key == 'activity' %}
+  <div class="panel glass">
+    <div class="section-title">今日異動</div>
+
+    <div class="activity-summary-grid">
+      <div class="activity-stat glass">
+        <div>新增</div>
+        <div id="activity-stat-new">0</div>
+      </div>
+      <div class="activity-stat glass">
+        <div>出貨</div>
+        <div id="activity-stat-ship">0</div>
+      </div>
+      <div class="activity-stat glass">
+        <div>未入倉</div>
+        <div id="activity-stat-unplaced">0</div>
+      </div>
+    </div>
+
+    <div id="activity-feed"></div>
+  </div>
+  {% endif %}
+
+  <!-- ========= 庫存 ========= -->
+  {% if module_key == 'inventory' %}
+  <div id="inventory-summary" class="card-list"></div>
+  {% endif %}
+
+  <!-- ========= 倉庫 ========= -->
+  {% if module_key == 'warehouse' %}
+  <div class="warehouse-toolbar">
+
+    <div class="zone-switches">
+      <button onclick="switchZone('A')" class="zone-switch active">A倉</button>
+      <button onclick="switchZone('B')" class="zone-switch">B倉</button>
+    </div>
+
+    <input id="warehouse-search" class="text-input" placeholder="搜尋 113 或客戶">
+
+  </div>
+
+  <div id="warehouse-map"></div>
+  {% endif %}
+
 </div>
+
+<!-- ========= JS ========= -->
+<script>
+
+// ===== OCR 保底（不再顯示失敗）=====
+async function handleOCR(file){
+  let text = "（辨識失敗，可手動輸入）";
+
+  try{
+    const form = new FormData();
+    form.append("file", file);
+
+    const res = await fetch("/ocr", { method:"POST", body:form });
+    const data = await res.json();
+
+    if(data.text){
+      text = data.text;
+    }
+
+    document.getElementById("ocr-confidence-pill").innerText =
+      (data.confidence || 0) + "%";
+
+  }catch(e){
+    console.log("OCR fallback");
+  }
+
+  document.getElementById("ocr-text").value = text;
+}
+
+// ===== 相簿 =====
+function openAlbumPicker(){
+  document.getElementById("album-input").click();
+}
+
+// ===== 拍照 =====
+function openCameraPicker(){
+  document.getElementById("camera-input").click();
+}
+
+// ===== 綁定 =====
+document.getElementById("album-input")?.addEventListener("change", e=>{
+  if(e.target.files[0]) handleOCR(e.target.files[0]);
+});
+document.getElementById("camera-input")?.addEventListener("change", e=>{
+  if(e.target.files[0]) handleOCR(e.target.files[0]);
+});
+
+// ===== 滑動刪除（今日異動）=====
+let startX = 0;
+
+document.addEventListener("touchstart", e=>{
+  startX = e.touches[0].clientX;
+});
+
+document.addEventListener("touchend", e=>{
+  let endX = e.changedTouches[0].clientX;
+  if(startX - endX > 80){
+    e.target.closest(".activity-row")?.remove();
+  }
+});
+
+</script>
+
 {% endblock %}
