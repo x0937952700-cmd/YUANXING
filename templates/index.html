@@ -7,7 +7,7 @@ body{font-family:Arial;background:#e9e6e1;text-align:center;}
 .title{font-size:28px;margin:20px;}
 .page{display:none;}
 .active{display:block;}
-button{padding:20px;margin:10px;width:85%;border-radius:12px;}
+button{padding:18px;margin:8px;width:85%;border-radius:12px;}
 </style>
 </head>
 
@@ -15,16 +15,16 @@ button{padding:20px;margin:10px;width:85%;border-radius:12px;}
 
 <div class="title">沅興木業</div>
 
-<div id="login" class="page active">
+<div id="login" class="page">
 <input id="u" placeholder="姓名"><br>
 <input id="p" placeholder="密碼"><br>
 <button onclick="login()">登入</button>
 </div>
 
 <div id="home" class="page">
-<button onclick="go('stock')">庫存</button>
+<button onclick="go('stock')">入庫</button>
 <button onclick="go('ship')">出貨</button>
-<button onclick="go('warehouse')">倉庫圖</button>
+<button onclick="go('warehouse')">倉庫</button>
 <button onclick="go('logs')">紀錄</button>
 </div>
 
@@ -32,7 +32,6 @@ button{padding:20px;margin:10px;width:85%;border-radius:12px;}
 <button onclick="go('home')">返回</button>
 <input id="p1" placeholder="商品">
 <input id="q1" placeholder="數量">
-<input id="c1" placeholder="客戶">
 <button onclick="add()">入庫</button>
 </div>
 
@@ -54,7 +53,13 @@ button{padding:20px;margin:10px;width:85%;border-radius:12px;}
 </div>
 
 <script>
-let user="";
+let user = localStorage.getItem("user")
+
+if(user){
+    go("home")
+}else{
+    go("login")
+}
 
 function login(){
  fetch("/api/login",{
@@ -65,23 +70,22 @@ function login(){
  .then(r=>r.json())
  .then(d=>{
   if(d.error){alert(d.error);return}
-  user=u.value
-  go('home')
+  user = u.value
+  localStorage.setItem("user",user)
+  go("home")
  })
 }
 
 function go(id){
  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'))
  document.getElementById(id).classList.add('active')
- if(id==="warehouse") loadW()
- if(id==="logs") loadLogs()
 }
 
 function add(){
  fetch("/api/add",{
   method:"POST",
   headers:{"Content-Type":"application/json"},
-  body:JSON.stringify({p:p1.value,q:q1.value,c:c1.value,user:user})
+  body:JSON.stringify({p:p1.value,q:q1.value,user:user})
  })
 }
 
@@ -97,7 +101,7 @@ function loadW(){
  fetch("/api/warehouse")
  .then(r=>r.json())
  .then(d=>{
-  w.innerHTML=JSON.stringify(d)
+  w.innerHTML=d.map(i=>`${i.p}(${i.q})`).join("<br>")
  })
 }
 
@@ -108,6 +112,11 @@ function loadLogs(){
   l.innerHTML=d.map(i=>`<li>${i.u}:${i.a}</li>`).join("")
  })
 }
+
+setInterval(()=>{
+ loadW()
+ loadLogs()
+},2000)
 </script>
 
 </body>
