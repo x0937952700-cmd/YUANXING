@@ -1,15 +1,563 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 
-    <h2>歡迎 {{user}}</h2>
-    <a href="/logout">登出</a>
+<title>沅興木業</title>
 
-    <h3>庫存</h3>
-    <textarea id="batch"></textarea>
-    <button onclick="addInventory()">新增</button>
+<style>
+body{
+    margin:0;
+    background:#e9e6e1;
+    font-family:Arial;
+}
 
-    <h3>倉庫</h3>
-    <input onkeyup="searchItem(this.value)">
-    <div id="warehouse"></div>
+/* ===== 共用頁面 ===== */
+.page{
+    display:none;
+}
 
-    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
-    <script src="/static/main.js"></script>
-    
+.active{
+    display:block;
+}
+
+/* ===== 首頁 ===== */
+.home{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+}
+
+/* 標題 */
+.title{
+    margin-top:40px;
+    font-size:28px;
+    font-weight:bold;
+}
+
+/* 按鈕區 */
+.menu{
+    margin-top:30px;
+    width:100%;
+    max-width:400px;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+}
+
+.menu-btn{
+    width:85%;
+    padding:20px;
+    margin:12px 0;
+    border:none;
+    border-radius:20px;
+    font-size:22px;
+    background:#f2f2f2;
+    box-shadow:0 4px 10px rgba(0,0,0,0.15);
+}
+
+.menu-btn:active{
+    transform:scale(0.96);
+}
+
+/* ===== 倉庫圖 ===== */
+#warehouse{
+    padding:10px;
+}
+
+.zone{
+    margin-bottom:30px;
+}
+
+.zone-title{
+    font-size:20px;
+    font-weight:bold;
+}
+
+.column{
+    display:inline-block;
+    margin:4px;
+    background:#eee;
+    border-radius:10px;
+    padding:5px;
+}
+
+.row{
+    display:flex;
+}
+
+.cell{
+    width:28px;
+    height:28px;
+    margin:2px;
+    font-size:10px;
+    text-align:center;
+    line-height:28px;
+    background:#ddd;
+    border-radius:4px;
+}
+
+.cell.filled{
+    background:#6fa8dc;
+    color:#fff;
+}
+
+.cell.highlight{
+    background:red !important;
+    animation:blink 1s infinite;
+}
+
+@keyframes blink{
+    0%{opacity:1}
+    50%{opacity:0.3}
+    100%{opacity:1}
+}
+
+/* 返回按鈕 */
+.back{
+    margin:10px;
+    padding:10px 20px;
+}
+</style>
+</head>
+
+<body>
+
+<!-- ===== 首頁 ===== -->
+<div id="homePage" class="page active home">
+
+    <div class="title">沅興木業</div>
+
+    <div class="menu">
+        <button class="menu-btn" onclick="alert('庫存')">庫存</button>
+        <button class="menu-btn" onclick="alert('訂單')">訂單</button>
+        <button class="menu-btn" onclick="alert('總單')">總單</button>
+        <button class="menu-btn" onclick="alert('出貨')">出貨</button>
+        <button class="menu-btn" onclick="goPage('warehousePage')">倉庫圖</button>
+        <button class="menu-btn" onclick="alert('客戶資料')">客戶資料</button>
+    </div>
+
+</div>
+
+<!-- ===== 倉庫圖頁 ===== -->
+<div id="warehousePage" class="page">
+
+<button class="back" onclick="goPage('homePage')">← 返回</button>
+
+<h2 style="text-align:center;">倉庫圖</h2>
+
+<input 
+    placeholder="搜尋商品..."
+    style="width:90%;padding:12px;margin:10px;border-radius:10px;"
+    oninput="searchItem(this.value)"
+>
+
+<div id="warehouse"></div>
+
+</div>
+
+<script>
+
+/* ===== 切頁 ===== */
+function goPage(id){
+    document.querySelectorAll(".page").forEach(p=>{
+        p.classList.remove("active");
+    });
+
+    document.getElementById(id).classList.add("active");
+}
+
+/* ===== 倉庫圖 ===== */
+let warehouseData = {};
+
+function buildWarehouse(){
+    let container = document.getElementById("warehouse");
+    container.innerHTML = "";
+
+    ["A","B"].forEach(zone=>{
+        let zoneDiv = document.createElement("div");
+        zoneDiv.className = "zone";
+        zoneDiv.innerHTML = `<div class="zone-title">${zone}區</div>`;
+
+        for(let col=1; col<=12; col++){
+
+            let colDiv = document.createElement("div");
+            colDiv.className = "column";
+
+            let back = document.createElement("div");
+            back.className = "row";
+
+            for(let i=1;i<=10;i++){
+                back.appendChild(createCell(`${zone}-B-${col}-${i}`));
+            }
+
+            let front = document.createElement("div");
+            front.className = "row";
+
+            for(let i=1;i<=10;i++){
+                front.appendChild(createCell(`${zone}-F-${col}-${i}`));
+            }
+
+            colDiv.appendChild(back);
+            colDiv.appendChild(front);
+            zoneDiv.appendChild(colDiv);
+        }
+
+        container.appendChild(zoneDiv);
+    });
+}
+
+function createCell(id){
+    let c = document.createElement("div");
+    c.className = "cell";
+    c.id = id;
+    c.innerText = id.split("-")[3];
+
+    c.onclick = ()=>{
+        let d = warehouseData[id];
+        if(d){
+            alert(`客戶:${d.customer}\n商品:${d.product}\n數量:${d.qty}`);
+        }
+    };
+
+    return c;
+}
+
+/* ===== 載入資料 ===== */
+async function loadWarehouse(){
+    let res = await fetch("/api/warehouse");
+    let data = await res.json();
+
+    warehouseData = {};
+
+    document.querySelectorAll(".cell").forEach(c=>{
+        c.classList.remove("filled","highlight");
+    });
+
+    data.forEach(i=>{
+        let cell = document.getElementById(i.location);
+        if(cell){
+            cell.classList.add("filled");
+            cell.innerText = i.qty;
+            warehouseData[i.location] = i;
+        }
+    });
+}
+
+/* ===== 搜尋 ===== */
+async function searchItem(k){
+    if(!k) return;
+
+    let res = await fetch("/api/search?kw="+k);
+    let data = await res.json();
+
+    document.querySelectorAll(".cell").forEach(c=>{
+        c.classList.remove("highlight");
+    });
+
+    data.forEach(i=>{
+        let cell = document.getElementById(i.location);
+        if(cell){
+            cell.classList.add("highlight");
+            cell.scrollIntoView({behavior:"smooth",block:"center"});
+        }
+    });
+}
+
+/* 初始化 */
+buildWarehouse();
+loadWarehouse();
+
+/* 即時更新 */
+setInterval(()=>{
+    if(document.getElementById("warehousePage").classList.contains("active")){
+        loadWarehouse();
+    }
+},3000);
+
+</script>
+
+</body>
+</html><!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<title>沅興木業</title>
+
+<style>
+body{
+    margin:0;
+    background:#e9e6e1;
+    font-family:Arial;
+}
+
+/* ===== 共用頁面 ===== */
+.page{
+    display:none;
+}
+
+.active{
+    display:block;
+}
+
+/* ===== 首頁 ===== */
+.home{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+}
+
+/* 標題 */
+.title{
+    margin-top:40px;
+    font-size:28px;
+    font-weight:bold;
+}
+
+/* 按鈕區 */
+.menu{
+    margin-top:30px;
+    width:100%;
+    max-width:400px;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+}
+
+.menu-btn{
+    width:85%;
+    padding:20px;
+    margin:12px 0;
+    border:none;
+    border-radius:20px;
+    font-size:22px;
+    background:#f2f2f2;
+    box-shadow:0 4px 10px rgba(0,0,0,0.15);
+}
+
+.menu-btn:active{
+    transform:scale(0.96);
+}
+
+/* ===== 倉庫圖 ===== */
+#warehouse{
+    padding:10px;
+}
+
+.zone{
+    margin-bottom:30px;
+}
+
+.zone-title{
+    font-size:20px;
+    font-weight:bold;
+}
+
+.column{
+    display:inline-block;
+    margin:4px;
+    background:#eee;
+    border-radius:10px;
+    padding:5px;
+}
+
+.row{
+    display:flex;
+}
+
+.cell{
+    width:28px;
+    height:28px;
+    margin:2px;
+    font-size:10px;
+    text-align:center;
+    line-height:28px;
+    background:#ddd;
+    border-radius:4px;
+}
+
+.cell.filled{
+    background:#6fa8dc;
+    color:#fff;
+}
+
+.cell.highlight{
+    background:red !important;
+    animation:blink 1s infinite;
+}
+
+@keyframes blink{
+    0%{opacity:1}
+    50%{opacity:0.3}
+    100%{opacity:1}
+}
+
+/* 返回按鈕 */
+.back{
+    margin:10px;
+    padding:10px 20px;
+}
+</style>
+</head>
+
+<body>
+
+<!-- ===== 首頁 ===== -->
+<div id="homePage" class="page active home">
+
+    <div class="title">沅興木業</div>
+
+    <div class="menu">
+        <button class="menu-btn" onclick="alert('庫存')">庫存</button>
+        <button class="menu-btn" onclick="alert('訂單')">訂單</button>
+        <button class="menu-btn" onclick="alert('總單')">總單</button>
+        <button class="menu-btn" onclick="alert('出貨')">出貨</button>
+        <button class="menu-btn" onclick="goPage('warehousePage')">倉庫圖</button>
+        <button class="menu-btn" onclick="alert('客戶資料')">客戶資料</button>
+    </div>
+
+</div>
+
+<!-- ===== 倉庫圖頁 ===== -->
+<div id="warehousePage" class="page">
+
+<button class="back" onclick="goPage('homePage')">← 返回</button>
+
+<h2 style="text-align:center;">倉庫圖</h2>
+
+<input 
+    placeholder="搜尋商品..."
+    style="width:90%;padding:12px;margin:10px;border-radius:10px;"
+    oninput="searchItem(this.value)"
+>
+
+<div id="warehouse"></div>
+
+</div>
+
+<script>
+
+/* ===== 切頁 ===== */
+function goPage(id){
+    document.querySelectorAll(".page").forEach(p=>{
+        p.classList.remove("active");
+    });
+
+    document.getElementById(id).classList.add("active");
+}
+
+/* ===== 倉庫圖 ===== */
+let warehouseData = {};
+
+function buildWarehouse(){
+    let container = document.getElementById("warehouse");
+    container.innerHTML = "";
+
+    ["A","B"].forEach(zone=>{
+        let zoneDiv = document.createElement("div");
+        zoneDiv.className = "zone";
+        zoneDiv.innerHTML = `<div class="zone-title">${zone}區</div>`;
+
+        for(let col=1; col<=12; col++){
+
+            let colDiv = document.createElement("div");
+            colDiv.className = "column";
+
+            let back = document.createElement("div");
+            back.className = "row";
+
+            for(let i=1;i<=10;i++){
+                back.appendChild(createCell(`${zone}-B-${col}-${i}`));
+            }
+
+            let front = document.createElement("div");
+            front.className = "row";
+
+            for(let i=1;i<=10;i++){
+                front.appendChild(createCell(`${zone}-F-${col}-${i}`));
+            }
+
+            colDiv.appendChild(back);
+            colDiv.appendChild(front);
+            zoneDiv.appendChild(colDiv);
+        }
+
+        container.appendChild(zoneDiv);
+    });
+}
+
+function createCell(id){
+    let c = document.createElement("div");
+    c.className = "cell";
+    c.id = id;
+    c.innerText = id.split("-")[3];
+
+    c.onclick = ()=>{
+        let d = warehouseData[id];
+        if(d){
+            alert(`客戶:${d.customer}\n商品:${d.product}\n數量:${d.qty}`);
+        }
+    };
+
+    return c;
+}
+
+/* ===== 載入資料 ===== */
+async function loadWarehouse(){
+    let res = await fetch("/api/warehouse");
+    let data = await res.json();
+
+    warehouseData = {};
+
+    document.querySelectorAll(".cell").forEach(c=>{
+        c.classList.remove("filled","highlight");
+    });
+
+    data.forEach(i=>{
+        let cell = document.getElementById(i.location);
+        if(cell){
+            cell.classList.add("filled");
+            cell.innerText = i.qty;
+            warehouseData[i.location] = i;
+        }
+    });
+}
+
+/* ===== 搜尋 ===== */
+async function searchItem(k){
+    if(!k) return;
+
+    let res = await fetch("/api/search?kw="+k);
+    let data = await res.json();
+
+    document.querySelectorAll(".cell").forEach(c=>{
+        c.classList.remove("highlight");
+    });
+
+    data.forEach(i=>{
+        let cell = document.getElementById(i.location);
+        if(cell){
+            cell.classList.add("highlight");
+            cell.scrollIntoView({behavior:"smooth",block:"center"});
+        }
+    });
+}
+
+/* 初始化 */
+buildWarehouse();
+loadWarehouse();
+
+/* 即時更新 */
+setInterval(()=>{
+    if(document.getElementById("warehousePage").classList.contains("active")){
+        loadWarehouse();
+    }
+},3000);
+
+</script>
+
+</body>
+</html>
