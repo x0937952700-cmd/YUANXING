@@ -2,85 +2,120 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-
-<title>沅興木業</title>
+<meta name="viewport" content="width=device-width">
+<title>沅興木業 FINAL</title>
 
 <style>
-body{
-    margin:0;
-    background:#e9e6e1;
-    font-family:Arial, sans-serif;
-    display:flex;
-    flex-direction:column;
-    align-items:center;
-}
-
-/* ===== 標題 ===== */
-.title{
-    margin-top:40px;
-    font-size:28px;
-    font-weight:bold;
-    color:#333;
-}
-
-/* ===== 容器 ===== */
-.menu{
-    margin-top:30px;
-    width:100%;
-    max-width:420px;
-    display:flex;
-    flex-direction:column;
-    align-items:center;
-}
-
-/* ===== 按鈕 ===== */
-.menu-btn{
-    width:90%;
-    padding:20px;
-    margin:12px 0;
-    border:none;
-    border-radius:20px;
-    font-size:22px;
-    background:#f2f2f2;
-    color:#333;
-    box-shadow:0 4px 10px rgba(0,0,0,0.15);
-    transition:0.2s;
-}
-
-.menu-btn:active{
-    transform:scale(0.96);
-    box-shadow:0 2px 5px rgba(0,0,0,0.2);
-}
+body{margin:0;background:#eee;font-family:Arial}
+.top{background:#fff;padding:12px;text-align:center;font-weight:bold}
+.btn{width:90%;padding:15px;margin:10px;font-size:18px}
+.card{background:#fff;margin:10px;padding:10px;border-radius:10px}
+.row{display:flex;justify-content:space-between;padding:8px;border-bottom:1px solid #ddd}
+.red{color:red}.green{color:green}
+.grid{display:grid;grid-template-columns:repeat(6,1fr);gap:5px}
+.cell{height:60px;background:#ddd;display:flex;align-items:center;justify-content:center}
+.fade{animation:fade .3s}
+@keyframes fade{from{opacity:0}to{opacity:1}}
 </style>
 </head>
 
 <body>
 
-<!-- ===== 標題（置中） ===== -->
-<div class="title">沅興木業</div>
+<div class="top">沅興木業 FINAL</div>
 
-<!-- ===== 主選單 ===== -->
-<div class="menu">
+<button class="btn" onclick="pick()">📸 OCR</button>
+<button class="btn" onclick="inv()">庫存</button>
+<button class="btn" onclick="wh()">倉庫</button>
+<button class="btn" onclick="act()">異動</button>
 
-    <button class="menu-btn" onclick="goPage('inventory')">庫存</button>
+<input type="file" id="file" multiple style="display:none">
 
-    <button class="menu-btn" onclick="goPage('orders')">訂單</button>
-
-    <button class="menu-btn" onclick="goPage('master')">總單</button>
-
-    <button class="menu-btn" onclick="goPage('ship')">出貨</button>
-
-    <button class="menu-btn" onclick="goPage('warehouse')">倉庫圖</button>
-
-    <button class="menu-btn" onclick="goPage('customers')">客戶資料</button>
-
-</div>
+<div id="app"></div>
 
 <script>
-function goPage(page){
-    alert("準備進入：" + page + "（之後我可以幫你接完整系統）");
+let all=[]
+
+function pick(){file.click()}
+
+file.onchange=async e=>{
+ for(let f of e.target.files){
+  let fd=new FormData()
+  fd.append("file",f)
+  let r=await fetch('/api/upload_ocr',{method:'POST',body:fd})
+  let j=await r.json()
+  j.lines.forEach(l=>all.push({t:l,c:j.confidence}))
+ }
+ renderOCR()
 }
+
+function renderOCR(){
+ let h='<div class="card">'
+ all.forEach((l,i)=>{
+  let c=l.c>0.8?'green':l.c>0.5?'':'red'
+  h+=`<div class="row ${c}">
+  <input value="${l.t}" onchange="edit(${i},this.value)">
+  <span>${(l.c*100).toFixed(0)}%</span>
+  </div>`
+ })
+ h+='</div><button class="btn" onclick="save()">入庫</button>'
+ app.innerHTML=h
+}
+
+function edit(i,v){
+ fetch('/api/ocr_learn',{method:'POST',headers:{'Content-Type':'application/json'},
+ body:JSON.stringify({w:all[i].t,c:v})})
+ all[i].t=v
+}
+
+async function save(){
+ for(let l of all){
+  await fetch('/api/add',{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({p:l.t,q:1})})
+ }
+ alert("完成")
+ all=[]
+ app.innerHTML=""
+}
+
+async function inv(){
+ let r=await fetch('/api/inventory');let j=await r.json()
+ let h='<div class="card">'
+ j.items.forEach(i=>{
+  h+=`<div class="row" onclick="loc('${i.p}')">${i.p}<span>${i.q}</span></div>`
+ })
+ h+='</div>'
+ app.innerHTML=h
+}
+
+async function wh(){
+ let r=await fetch('/api/inventory');let j=await r.json()
+ let h='<div class="card"><div class="grid">'
+ for(let i=0;i<24;i++) h+=`<div id="c${i}" class="cell"></div>`
+ h+='</div></div>'
+ app.innerHTML=h
+ j.items.forEach(i=>{
+  if(i.l) document.getElementById("c"+i.l).innerText=i.p
+ })
+}
+
+function loc(p){
+ wh()
+ setTimeout(()=>{
+  document.querySelectorAll('.cell').forEach(c=>{
+   if(c.innerText==p) c.style.border="3px solid red"
+  })
+ },300)
+}
+
+async function act(){
+ let r=await fetch('/api/activity');let j=await r.json()
+ let h='<div class="card">'
+ j.items.forEach(i=>h+=`<div>${i.a} ${i.t}</div>`)
+ h+='</div>'
+ app.innerHTML=h
+}
+
+setInterval(()=>{if(app.innerHTML.includes("grid"))wh()},1000)
 </script>
 
 </body>
