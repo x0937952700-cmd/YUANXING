@@ -1,22 +1,13 @@
-// =============================
-// 🔥 全域狀態
-// =============================
+// ==========================
+// 🌐 全域
+// ==========================
 let currentPage = ''
 let draggingProduct = null
+let unreadCount = 0
 
-// =============================
-// 🔥 自動即時同步（企業版）
-// =============================
-setInterval(()=>{
-  if(currentPage==='inventory') loadInventory()
-  if(currentPage==='warehouse') loadWarehouse()
-  if(currentPage==='activity') loadActivity()
-},2000)
-
-
-// =============================
-// 🔥 通知（企業版）
-// =============================
+// ==========================
+// 🔔 通知（toast）
+// ==========================
 function toast(msg){
   const t=document.createElement('div')
   t.innerText=msg
@@ -24,7 +15,7 @@ function toast(msg){
     position:fixed;
     top:20px;
     right:20px;
-    background:#333;
+    background:#222;
     color:#fff;
     padding:10px 15px;
     border-radius:8px;
@@ -34,30 +25,37 @@ function toast(msg){
   setTimeout(()=>t.remove(),2000)
 }
 
+// ==========================
+// 🔴 今日異動紅點
+// ==========================
+async function updateBadge(){
+  const r = await fetch('/api/activity')
+  const j = await r.json()
 
-// =============================
-// 🔥 OCR → 點擊定位（企業核心）
-// =============================
-function highlightProduct(product){
+  const count = (j.items||[]).length
 
-  document.querySelectorAll('.cell').forEach(c=>{
-    c.style.outline = 'none'
+  const badge = document.getElementById("badge")
+  if(!badge) return
 
-    if(c.innerText.includes(product)){
-      c.style.outline = '3px solid red'
-
-      c.scrollIntoView({
-        behavior:'smooth',
-        block:'center'
-      })
-    }
-  })
+  badge.innerText = count
+  badge.style.display = count>0 ? 'inline-block':'none'
 }
 
+// ==========================
+// 🔄 即時同步（企業版）
+// ==========================
+setInterval(()=>{
+  updateBadge()
 
-// =============================
-// 🔥 OCR 上傳
-// =============================
+  if(currentPage==='inventory') loadInventory()
+  if(currentPage==='warehouse') loadWarehouse()
+  if(currentPage==='activity') loadActivity()
+},2000)
+
+
+// ==========================
+// 📸 OCR（手動確認版）
+// ==========================
 async function uploadOCR(){
 
   const f=document.getElementById('ocrFile').files[0]
@@ -71,42 +69,79 @@ async function uploadOCR(){
 
   const lines = j.lines || []
 
-  document.getElementById('ocrResult').innerHTML =
-    `<div>信心值: ${j.confidence||0}</div>` +
-    lines.map(l=>
-      `<div onclick="highlightProduct('${l}')"
-            style="padding:5px;border-bottom:1px solid #ddd;">
-        ${l}
-      </div>`
-    ).join('')
+  document.getElementById('ocrResult').innerHTML = `
+    <div>信心值: ${j.confidence||0}</div>
+    ${lines.map((l,i)=>`
+      <div style="padding:5px;border-bottom:1px solid #ddd;">
+        <input value="${l}" id="ocr_${i}">
+        <button onclick="highlightProduct('${l}')">定位</button>
+      </div>
+    `).join('')}
+    <button onclick="confirmOCR(${lines.length})">確認入庫</button>
+  `
 
-  toast("OCR完成")
+  toast("OCR完成（請確認）")
 }
 
+// ==========================
+// ✅ 手動入庫（重點）
+// ==========================
+async function confirmOCR(n){
 
-// =============================
-// 🔥 庫存
-// =============================
+  let items = []
+
+  for(let i=0;i<n;i++){
+    const val = document.getElementById("ocr_"+i).value
+    if(val) items.push(val)
+  }
+
+  for(let p of items){
+    await fetch('/api/add',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({p:p,q:1})
+    })
+  }
+
+  toast("入庫完成")
+  loadInventory()
+}
+
+// ==========================
+// 🎯 OCR → 倉庫定位
+// ==========================
+function highlightProduct(product){
+
+  document.querySelectorAll('.cell').forEach(c=>{
+    c.style.outline='none'
+
+    if(c.innerText.includes(product)){
+      c.style.outline='3px solid red'
+      c.scrollIntoView({behavior:'smooth',block:'center'})
+    }
+  })
+}
+
+// ==========================
+// 📦 庫存
+// ==========================
 async function loadInventory(){
+
+  currentPage='inventory'
 
   const r=await fetch('/api/inventory')
   const j=await r.json()
 
-  const items = j.items || []
-
   document.getElementById("app").innerHTML =
     `<h3>庫存</h3>` +
-    items.map(x=>
-      `<div class="list-row">
-        <b>${x.p}</b> ${x.q}
-      </div>`
+    (j.items||[]).map(x=>
+      `<div><b>${x.p}</b> ${x.q}</div>`
     ).join('')
 }
 
-
-// =============================
-// 🔥 訂單
-// =============================
+// ==========================
+// 🧾 訂單
+// ==========================
 async function createOrder(){
 
   const p=document.getElementById("order_p").value
@@ -120,17 +155,13 @@ async function createOrder(){
 
   const j=await r.json()
 
-  if(j.error){
-    toast(j.error)
-  }else{
-    toast("訂單成功")
-  }
+  if(j.error) toast(j.error)
+  else toast("訂單成功")
 }
 
-
-// =============================
-// 🔥 出貨
-// =============================
+// ==========================
+// 🚚 出貨
+// ==========================
 async function ship(){
 
   const p=document.getElementById("ship_p").value
@@ -144,107 +175,94 @@ async function ship(){
 
   const j=await r.json()
 
-  if(j.error){
-    toast(j.error)
-  }else{
-    toast("出貨成功")
-  }
+  if(j.error) toast(j.error)
+  else toast("出貨成功")
 }
 
-
-// =============================
-// 🔥 倉庫（拖拉 + 即時）
-// =============================
+// ==========================
+// 🏭 倉庫（拖拉）
+// ==========================
 async function loadWarehouse(){
 
-  currentPage = 'warehouse'
+  currentPage='warehouse'
 
-  const r = await fetch('/api/w')
-  const data = await r.json()
+  const r=await fetch('/api/w')
+  const data=await r.json()
 
-  const map = {}
-  data.forEach(i=>{
-    map[i[2]] = i[0]
-  })
+  const map={}
+  data.forEach(i=>map[i[2]]=i[0])
 
-  let html = '<h3>倉庫圖</h3><div class="grid">'
+  let html='<h3>倉庫</h3><div class="grid">'
 
   for(let i=1;i<=30;i++){
-    const loc = "A-"+i
-    const p = map[loc] || ""
+    const loc="A-"+i
+    const p=map[loc]||""
 
-    html += `
-    <div class="cell ${p?'used':'empty'}"
-         data-loc="${loc}">
-
-         <div class="loc">${loc}</div>
-
-         <div class="item"
-              draggable="true"
-              data-product="${p}">
-              ${p || ''}
-         </div>
+    html+=`
+    <div class="cell ${p?'used':'empty'}" data-loc="${loc}">
+      <div class="loc">${loc}</div>
+      <div class="item" draggable="true" data-product="${p}">
+        ${p||''}
+      </div>
     </div>`
   }
 
-  html += '</div>'
+  html+='</div>'
 
-  document.getElementById("app").innerHTML = html
-
-  enableWarehouseDrag()
+  document.getElementById("app").innerHTML=html
+  enableDrag()
 }
 
-
-// =============================
-// 🔥 拖拉系統（企業版）
-// =============================
-function enableWarehouseDrag(){
+// ==========================
+// 🖐 拖拉
+// ==========================
+function enableDrag(){
 
   document.querySelectorAll('.cell').forEach(cell=>{
-    cell.ondragover = e => e.preventDefault()
+    cell.ondragover=e=>e.preventDefault()
 
-    cell.ondrop = async ()=>{
+    cell.ondrop=async ()=>{
       if(!draggingProduct) return
 
       await fetch('/api/move',{
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({
-          p: draggingProduct,
-          l: cell.dataset.loc
+          p:draggingProduct,
+          l:cell.dataset.loc
         })
       })
 
       toast("已移動")
-
-      draggingProduct = null
+      draggingProduct=null
       loadWarehouse()
     }
   })
 
   document.querySelectorAll('.item').forEach(el=>{
-    el.ondragstart = ()=>{
-      draggingProduct = el.dataset.product
+    el.ondragstart=()=>{
+      draggingProduct=el.dataset.product
     }
   })
 }
 
-
-// =============================
-// 🔥 異動
-// =============================
+// ==========================
+// 📊 異動
+// ==========================
 async function loadActivity(){
 
-  currentPage = 'activity'
+  currentPage='activity'
 
   const r=await fetch('/api/activity')
   const j=await r.json()
 
-  const items = j.items || []
-
   document.getElementById("app").innerHTML =
-    `<h3>異動紀錄</h3>` +
-    items.map(x=>
+    `<h3>異動</h3>` +
+    (j.items||[]).map(x=>
       `<div>${x.a||x.action} ${x.t||x.created_at}</div>`
     ).join('')
+
+  // 清除紅點
+  const badge=document.getElementById("badge")
+  if(badge) badge.style.display='none'
 }
