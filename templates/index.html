@@ -3,119 +3,153 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width">
-<title>沅興木業 FINAL</title>
+
+<title>沅興木業</title>
 
 <style>
-body{margin:0;background:#eee;font-family:Arial}
-.top{background:#fff;padding:12px;text-align:center;font-weight:bold}
-.btn{width:90%;padding:15px;margin:10px;font-size:18px}
-.card{background:#fff;margin:10px;padding:10px;border-radius:10px}
-.row{display:flex;justify-content:space-between;padding:8px;border-bottom:1px solid #ddd}
-.red{color:red}.green{color:green}
-.grid{display:grid;grid-template-columns:repeat(6,1fr);gap:5px}
-.cell{height:60px;background:#ddd;display:flex;align-items:center;justify-content:center}
-.fade{animation:fade .3s}
-@keyframes fade{from{opacity:0}to{opacity:1}}
+body{
+  margin:0;
+  font-family:Arial;
+  background:#f2f2f2;
+}
+
+/* ===== 標題 ===== */
+.top{
+  background:#fff;
+  padding:15px;
+  text-align:center;
+  font-size:22px;
+  font-weight:bold;
+}
+
+/* ===== 按鈕 ===== */
+.btn{
+  width:90%;
+  margin:10px auto;
+  display:block;
+  padding:15px;
+  font-size:18px;
+}
+
+/* ===== 倉庫 ===== */
+.grid{
+  display:grid;
+  grid-template-columns:repeat(5,1fr);
+  gap:8px;
+  padding:10px;
+}
+
+.cell{
+  height:90px;
+  border-radius:10px;
+  padding:5px;
+  position:relative;
+}
+
+.used{
+  background:#a5d6a7;
+}
+
+.empty{
+  background:#eee;
+}
+
+.loc{
+  font-size:12px;
+  position:absolute;
+  top:3px;
+  left:5px;
+}
+
+.item{
+  margin-top:20px;
+  text-align:center;
+  font-weight:bold;
+}
 </style>
+
 </head>
 
 <body>
 
-<div class="top">沅興木業 FINAL</div>
+<div class="top">沅興木業</div>
 
-<button class="btn" onclick="pick()">📸 OCR</button>
-<button class="btn" onclick="inv()">庫存</button>
-<button class="btn" onclick="wh()">倉庫</button>
-<button class="btn" onclick="act()">異動</button>
-
-<input type="file" id="file" multiple style="display:none">
+<button class="btn" onclick="loadWarehouse()">倉庫</button>
 
 <div id="app"></div>
 
 <script>
-let all=[]
 
-function pick(){file.click()}
+let draggingProduct = null
 
-file.onchange=async e=>{
- for(let f of e.target.files){
-  let fd=new FormData()
-  fd.append("file",f)
-  let r=await fetch('/api/upload_ocr',{method:'POST',body:fd})
-  let j=await r.json()
-  j.lines.forEach(l=>all.push({t:l,c:j.confidence}))
- }
- renderOCR()
-}
+// ===== 每2秒同步 =====
+setInterval(loadWarehouse,2000)
 
-function renderOCR(){
- let h='<div class="card">'
- all.forEach((l,i)=>{
-  let c=l.c>0.8?'green':l.c>0.5?'':'red'
-  h+=`<div class="row ${c}">
-  <input value="${l.t}" onchange="edit(${i},this.value)">
-  <span>${(l.c*100).toFixed(0)}%</span>
-  </div>`
- })
- h+='</div><button class="btn" onclick="save()">入庫</button>'
- app.innerHTML=h
-}
+// ===== 載入倉庫 =====
+async function loadWarehouse(){
 
-function edit(i,v){
- fetch('/api/ocr_learn',{method:'POST',headers:{'Content-Type':'application/json'},
- body:JSON.stringify({w:all[i].t,c:v})})
- all[i].t=v
-}
+  const r = await fetch('/api/w')
+  const data = await r.json()
 
-async function save(){
- for(let l of all){
-  await fetch('/api/add',{method:'POST',headers:{'Content-Type':'application/json'},
-  body:JSON.stringify({p:l.t,q:1})})
- }
- alert("完成")
- all=[]
- app.innerHTML=""
-}
-
-async function inv(){
- let r=await fetch('/api/inventory');let j=await r.json()
- let h='<div class="card">'
- j.items.forEach(i=>{
-  h+=`<div class="row" onclick="loc('${i.p}')">${i.p}<span>${i.q}</span></div>`
- })
- h+='</div>'
- app.innerHTML=h
-}
-
-async function wh(){
- let r=await fetch('/api/inventory');let j=await r.json()
- let h='<div class="card"><div class="grid">'
- for(let i=0;i<24;i++) h+=`<div id="c${i}" class="cell"></div>`
- h+='</div></div>'
- app.innerHTML=h
- j.items.forEach(i=>{
-  if(i.l) document.getElementById("c"+i.l).innerText=i.p
- })
-}
-
-function loc(p){
- wh()
- setTimeout(()=>{
-  document.querySelectorAll('.cell').forEach(c=>{
-   if(c.innerText==p) c.style.border="3px solid red"
+  const map = {}
+  data.forEach(i=>{
+    map[i[2]] = i[0] // location → product
   })
- },300)
+
+  let html = '<div class="grid">'
+
+  for(let i=1;i<=30;i++){
+    const loc = "A-"+i
+    const p = map[loc] || ""
+
+    html += `
+    <div class="cell ${p?'used':'empty'}"
+         ondragover="allowDrop(event)"
+         ondrop="drop('${loc}')">
+
+         <div class="loc">${loc}</div>
+
+         <div draggable="true"
+              ondragstart="drag('${p}')"
+              class="item">
+              ${p || ''}
+         </div>
+    </div>`
+  }
+
+  html += '</div>'
+
+  document.getElementById("app").innerHTML = html
 }
 
-async function act(){
- let r=await fetch('/api/activity');let j=await r.json()
- let h='<div class="card">'
- j.items.forEach(i=>h+=`<div>${i.a} ${i.t}</div>`)
- h+='</div>'
- app.innerHTML=h
+// ===== 拖 =====
+function drag(p){
+  draggingProduct = p
 }
 
-setInterval(()=>{if(app.innerHTML.includes("grid"))wh()},1000)
+// ===== 放 =====
+async function drop(loc){
+
+  if(!draggingProduct) return
+
+  await fetch('/api/move',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      p: draggingProduct,
+      l: loc
+    })
+  })
+
+  draggingProduct = null
+  loadWarehouse()
+}
+
+// ===== 允許拖 =====
+function allowDrop(e){
+  e.preventDefault()
+}
+
 </script>
 
 </body>
