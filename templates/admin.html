@@ -1,8 +1,10 @@
 
-<h1>管理員</h1>
-{% for u,v in users.items() %}
-<p>{{u}} - {{v.blacklisted}}
-<a href="/block/{{u}}">封鎖</a>
-<a href="/unblock/{{u}}">解除</a>
-</p>
-{% endfor %}
+    <h2>管理員</h2>
+    {% for name,data in users.items() %}
+    <div>
+        {{name}} - {{data.blacklisted}}
+        <a href="/block/{{name}}">封鎖</a>
+        <a href="/unblock/{{name}}">解除</a>
+    </div>
+    {% endfor %}
+    

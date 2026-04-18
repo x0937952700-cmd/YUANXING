@@ -1,11 +1,15 @@
 
-<link rel="stylesheet" href="/static/style.css">
-<h1>沅興木業</h1>
-<div class="top">
-<div class="small">{{user}}</div>
-<a href="/admin" class="small">設定</a>
-<div class="small">今日異動</div>
-<div class="small">登出</div>
-</div>
-<a href="/inventory" class="btn">庫存</a>
-<a href="/warehouse" class="btn">倉庫圖</a>
+    <h2>歡迎 {{user}}</h2>
+    <a href="/logout">登出</a>
+
+    <h3>庫存</h3>
+    <textarea id="batch"></textarea>
+    <button onclick="addInventory()">新增</button>
+
+    <h3>倉庫</h3>
+    <input onkeyup="searchItem(this.value)">
+    <div id="warehouse"></div>
+
+    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+    <script src="/static/main.js"></script>
+    
