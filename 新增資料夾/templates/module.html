@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="app-shell" data-page="module" data-module="{{ module }}">
+  <header class="module-header">
+    <a class="pill action" href="/">← 回首頁</a>
+    <div class="module-title-wrap">
+      <div class="eyebrow">沅興木業</div>
+      <h1 id="moduleTitle">載入中...</h1>
+    </div>
+  </header>
+  <main class="module-main">
+    <div id="moduleRoot" class="module-root">載入中...</div>
+  </main>
+</div>
+
+<div class="modal" id="editModal" hidden>
+  <div class="modal-card modal-wide">
+    <button class="modal-close" data-close="#editModal">×</button>
+    <div id="editModalContent"></div>
+  </div>
+</div>
+
+<div class="toast-stack" id="toastStack"></div>
+<script>
+  window.APP_BOOT = {
+    page: "module",
+    module: "{{ module }}",
+    user: "{{ user }}"
+  };
+</script>
+{% endblock %}

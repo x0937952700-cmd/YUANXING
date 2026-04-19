@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="app-shell">
+  <header class="home-header">
+    <div class="eyebrow">AI OCR 智慧辨識 + 倉庫定位 + 出貨管理</div>
+    <h1 class="home-title">沅興木業</h1>
+
+    <div class="top-actions">
+      <div class="pill">{{ user }}</div>
+      <button class="pill action" id="settingsBtn">設定</button>
+      <button class="pill action" id="todayChangesBtn" data-badge="{{ unread_notifications }}">今日異動</button>
+      <button class="pill action" id="logoutBtn">登出</button>
+    </div>
+  </header>
+
+  <main class="home-main">
+    <div class="home-buttons vertical">
+      <a class="home-btn" href="/module/inventory">庫存</a>
+      <a class="home-btn" href="/module/orders">訂單</a>
+      <a class="home-btn" href="/module/master_orders">總單</a>
+      <a class="home-btn" href="/module/shipping">出貨</a>
+      <a class="home-btn" href="/module/shipping_records">出貨查詢</a>
+      <a class="home-btn" href="/module/warehouse">倉庫圖</a>
+      <a class="home-btn" href="/module/customers">客戶資料</a>
+    </div>
+
+    <section class="summary-grid">
+      <div class="summary-card"><span>今日新增</span><strong id="sumNew">{{ summary.new_count }}</strong></div>
+      <div class="summary-card"><span>今日出貨量</span><strong id="sumShip">{{ summary.ship_count }}</strong></div>
+      <div class="summary-card"><span>未上架商品</span><strong id="sumUnplaced">{{ summary.unplaced_count }}</strong></div>
+      <div class="summary-card"><span>異常紀錄</span><strong id="sumAnomaly">{{ summary.anomaly_count }}</strong></div>
+    </section>
+
+    <section class="panel hero">
+      <div class="hero-text">
+        <div class="eyebrow">商業級操作介面</div>
+        <h2>手機拍照 / 相簿上傳 / OCR / 人工修正 / 自動學習</h2>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="toast-stack" id="toastStack"></div>
+
+<div class="modal" id="settingsModal" hidden>
+  <div class="modal-card">
+    <button class="modal-close" data-close="#settingsModal">×</button>
+    <h3>修改密碼</h3>
+    <label>舊密碼</label>
+    <input id="oldPassword" type="password">
+    <label>新密碼</label>
+    <input id="newPassword" type="password">
+    <label>確認新密碼</label>
+    <input id="confirmPassword" type="password">
+    <button class="btn primary full" id="savePasswordBtn">儲存</button>
+    <div id="passwordMsg" class="error-box"></div>
+  </div>
+</div>
+
+<div class="modal" id="todayModal" hidden>
+  <div class="modal-card modal-wide">
+    <button class="modal-close" data-close="#todayModal">×</button>
+    <h3>今日異動</h3>
+    <div id="todayModalContent" class="loading">載入中...</div>
+  </div>
+</div>
+
+<script>
+  window.APP_BOOT = {
+    page: "home",
+    user: "{{ user }}",
+    badge: {{ unread_notifications|default(0) }},
+  };
+</script>
+{% endblock %}

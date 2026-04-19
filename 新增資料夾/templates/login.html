@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="login-wrap">
+  <div class="brand-card">
+    <div class="brand-mark">沅</div>
+    <div>
+      <div class="eyebrow">AI OCR 智慧辨識 + 倉庫定位 + 出貨管理</div>
+      <h1>沅興木業</h1>
+    </div>
+  </div>
+
+  <form id="loginForm" class="panel login-panel">
+    <label>帳號</label>
+    <input id="username" name="username" autocomplete="username" placeholder="員工姓名" required>
+    <label>密碼</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" placeholder="第一次登入輸入密碼" required>
+    <button class="btn primary full" type="submit">登入</button>
+    <p class="muted small">首次登入會自動建立帳號。</p>
+    <div id="loginError" class="error-box"></div>
+  </form>
+</div>
+{% endblock %}
