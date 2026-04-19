@@ -1,143 +1,56 @@
 <!DOCTYPE html>
-<html lang="zh-Hant">
-<head>
-<meta charset="UTF-8">
-<title>沅興木業</title>
-</head>
+<html>
 <body>
 
 <h2>沅興木業</h2>
 
-<button onclick="inventory()">庫存</button>
-<button onclick="orderPage()">訂單</button>
-<button onclick="shipPage()">出貨</button>
-<button onclick="shipQuery()">出貨查詢</button>
-<button onclick="warehouse()">倉庫圖</button>
-<button onclick="customers()">客戶資料</button>
-<button onclick="activity()">異動資料</button>
+<button onclick="inv()">庫存</button>
+<button onclick="order()">訂單</button>
+<button onclick="ship()">出貨</button>
+<button onclick="query()">出貨查詢</button>
+<button onclick="wh()">倉庫</button>
+<button onclick="cus()">客戶</button>
+<button onclick="act()">異動</button>
 
 <div id="app"></div>
 
 <script>
+function inv(){fetch('/api/inventory').then(r=>r.json()).then(j=>{
+app.innerHTML=j.items.map(x=>x.p+"-"+x.q).join("<br>")
+})}
 
-// ===== toast =====
-function toast(t){alert(t)}
+function order(){app.innerHTML=`<input id=p><input id=q>
+<button onclick="send()">送</button>`}
 
-// ===== 庫存 + OCR =====
-function inventory(){
-  app.innerHTML=`
-  <input type="file" id="f">
-  <button onclick="ocr()">OCR</button>
-  <div id="ocr"></div>
-  <div id="list"></div>`
-  loadInv()
+function send(){
+fetch('/api/order',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({p:p.value,q:+q.value})})
 }
 
-async function ocr(){
-  const fd=new FormData()
-  fd.append("file",f.files[0])
-  const r=await fetch('/api/upload_ocr',{method:'POST',body:fd})
-  const j=await r.json()
+function ship(){app.innerHTML=`<input id=sp><input id=sq>
+<button onclick="go()">出</button>`}
 
-  ocr.innerHTML=j.lines.map(l=>`
-    ${l}
-    <button onclick="add('${l}')">入庫</button>
-  `).join("")
+function go(){
+fetch('/api/ship',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({p:sp.value,q:+sq.value})})
 }
 
-async function add(p){
-  await fetch('/api/add',{method:'POST',
-  headers:{'Content-Type':'application/json'},
-  body:JSON.stringify({p,q:1})})
-  loadInv()
-}
+function query(){fetch('/api/orders').then(r=>r.json()).then(j=>{
+app.innerHTML=j.items.map(x=>x.product).join("<br>")
+})}
 
-async function loadInv(){
-  const r=await fetch('/api/inventory')
-  const j=await r.json()
-  list.innerHTML=j.items.map(x=>`<div>${x.p}-${x.q}</div>`).join("")
-}
+function wh(){fetch('/api/w').then(r=>r.json()).then(j=>{
+app.innerHTML=j.map(x=>x[0]+"-"+x[1]).join("<br>")
+})}
 
-// ===== 訂單 =====
-function orderPage(){
-  app.innerHTML=`<input id="p"><input id="q">
-  <button onclick="order()">送出</button>`
-}
+function cus(){fetch('/api/customers').then(r=>r.json()).then(j=>{
+app.innerHTML=j.items.map(x=>x.name).join("<br>")
+})}
 
-async function order(){
-  const r=await fetch('/api/order',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({p:p.value,q:parseInt(q.value)})
-  })
-  toast("完成")
-}
-
-// ===== 出貨 =====
-function shipPage(){
-  app.innerHTML=`<input id="sp"><input id="sq">
-  <button onclick="ship()">出貨</button>`
-}
-
-async function ship(){
-  await fetch('/api/ship',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({p:sp.value,q:parseInt(sq.value)})
-  })
-  toast("完成")
-}
-
-// ===== 出貨查詢 =====
-async function shipQuery(){
-  const r=await fetch('/api/orders')
-  const j=await r.json()
-  app.innerHTML=j.items.map(x=>`<div>${x.product}</div>`).join("")
-}
-
-// ===== 倉庫 =====
-let dragItem=null
-
-async function warehouse(){
-  const r=await fetch('/api/w')
-  const d=await r.json()
-  const map={}
-  d.forEach(i=>map[i[2]]=i[0])
-
-  let h=''
-  for(let i=1;i<=20;i++){
-    let loc="A-"+i,p=map[loc]||""
-    h+=`<div draggable="true" ondragstart="drag('${p}')" 
-    ondrop="drop('${loc}')" ondragover="event.preventDefault()">
-    ${loc}-${p}</div>`
-  }
-  app.innerHTML=h
-}
-
-function drag(p){dragItem=p}
-async function drop(l){
-  await fetch('/api/move',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({p:dragItem,l})
-  })
-  warehouse()
-}
-
-// ===== 客戶 =====
-async function customers(){
-  const r=await fetch('/api/customers')
-  const j=await r.json()
-  app.innerHTML=j.items.map(x=>`<div>${x.name}</div>`).join("")
-}
-
-// ===== 異動 =====
-async function activity(){
-  const r=await fetch('/api/activity')
-  const j=await r.json()
-  app.innerHTML=j.items.map(x=>`<div>${x.action}</div>`).join("")
-}
-
+function act(){fetch('/api/activity').then(r=>r.json()).then(j=>{
+app.innerHTML=j.items.map(x=>x.action).join("<br>")
+})}
 </script>
+
 </body>
 </html>
