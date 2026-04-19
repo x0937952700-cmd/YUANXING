@@ -2,292 +2,142 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width">
-
 <title>沅興木業</title>
-
-<style>
-body{margin:0;background:#e9e6e1;font-family:Arial;text-align:center;}
-.title{margin-top:20px;font-size:22px;font-weight:bold;}
-.menu-btn{width:90%;margin:10px auto;padding:15px;font-size:18px;border-radius:12px;}
-
-.grid{
-  display:grid;
-  grid-template-columns:repeat(10,1fr);
-  gap:6px;
-  padding:10px;
-}
-
-.cell{
-  height:70px;
-  border-radius:8px;
-  font-size:12px;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-}
-
-.used{background:#81c784;}
-.empty{background:#eee;}
-.zoneA{background:#dcedc8;}
-.zoneB{background:#ffe0b2;}
-</style>
 </head>
-
 <body>
 
-<div class="title">沅興木業</div>
+<h2>沅興木業</h2>
 
-<button class="menu-btn" onclick="renderInventory()">庫存</button>
-<button class="menu-btn" onclick="renderOrder()">訂單</button>
-<button class="menu-btn" onclick="renderShip()">出貨</button>
-<button class="menu-btn" onclick="renderShipQuery()">出貨查詢</button>
-<button class="menu-btn" onclick="renderWarehouse()">倉庫圖</button>
-<button class="menu-btn" onclick="renderCustomers()">客戶資料</button>
-<button class="menu-btn" onclick="renderActivity()">異動資料</button>
+<button onclick="inventory()">庫存</button>
+<button onclick="orderPage()">訂單</button>
+<button onclick="shipPage()">出貨</button>
+<button onclick="shipQuery()">出貨查詢</button>
+<button onclick="warehouse()">倉庫圖</button>
+<button onclick="customers()">客戶資料</button>
+<button onclick="activity()">異動資料</button>
 
-<hr>
 <div id="app"></div>
 
 <script>
 
 // ===== toast =====
-function toast(msg){
-  const t=document.createElement('div')
-  t.innerText=msg
-  t.style="position:fixed;top:20px;right:20px;background:#333;color:#fff;padding:10px;border-radius:8px;"
-  document.body.appendChild(t)
-  setTimeout(()=>t.remove(),2000)
-}
+function toast(t){alert(t)}
 
-// ===== OCR + 庫存 =====
-async function renderInventory(){
+// ===== 庫存 + OCR =====
+function inventory(){
   app.innerHTML=`
-  <h3>庫存 + OCR</h3>
   <input type="file" id="f">
-  <button onclick="upload()">OCR辨識</button>
+  <button onclick="ocr()">OCR</button>
   <div id="ocr"></div>
-  <hr>
-  <div id="list"></div>
-  `
-
-  loadInventory()
+  <div id="list"></div>`
+  loadInv()
 }
 
-async function upload(){
-  const f=document.getElementById("f").files[0]
+async function ocr(){
   const fd=new FormData()
-  fd.append("file",f)
-
+  fd.append("file",f.files[0])
   const r=await fetch('/api/upload_ocr',{method:'POST',body:fd})
   const j=await r.json()
 
-  document.getElementById("ocr").innerHTML =
-    j.lines.map(l=>`
-      <div>
-        ${l}
-        <button onclick="addItem('${l}')">入庫</button>
-        <button onclick="highlight('${l}')">定位</button>
-      </div>
-    `).join("")
+  ocr.innerHTML=j.lines.map(l=>`
+    ${l}
+    <button onclick="add('${l}')">入庫</button>
+  `).join("")
 }
 
-async function addItem(p){
-  await fetch('/api/add',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({p:p,q:1})
-  })
-  toast("入庫完成")
-  loadInventory()
+async function add(p){
+  await fetch('/api/add',{method:'POST',
+  headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({p,q:1})})
+  loadInv()
 }
 
-async function loadInventory(){
+async function loadInv(){
   const r=await fetch('/api/inventory')
   const j=await r.json()
-
-  document.getElementById("list").innerHTML =
-    j.items.map(x=>`<div>${x.p} - ${x.q}</div>`).join("")
+  list.innerHTML=j.items.map(x=>`<div>${x.p}-${x.q}</div>`).join("")
 }
 
 // ===== 訂單 =====
-function renderOrder(){
-  app.innerHTML=`
-  <h3>訂單</h3>
-  <input id="p"><input id="q">
+function orderPage(){
+  app.innerHTML=`<input id="p"><input id="q">
   <button onclick="order()">送出</button>`
 }
 
 async function order(){
-  const p=p.value,q=parseInt(q.value)
   const r=await fetch('/api/order',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({p,q})
+    body:JSON.stringify({p:p.value,q:parseInt(q.value)})
   })
-  const j=await r.json()
-  toast(j.ok?'成功':j.error)
+  toast("完成")
 }
 
 // ===== 出貨 =====
-function renderShip(){
-  app.innerHTML=`
-  <h3>出貨</h3>
-  <input id="sp"><input id="sq">
+function shipPage(){
+  app.innerHTML=`<input id="sp"><input id="sq">
   <button onclick="ship()">出貨</button>`
 }
 
 async function ship(){
-  const p=sp.value,q=parseInt(sq.value)
-  const r=await fetch('/api/ship',{
+  await fetch('/api/ship',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({p,q})
+    body:JSON.stringify({p:sp.value,q:parseInt(sq.value)})
   })
-  const j=await r.json()
-  toast(j.ok?'成功':j.error)
+  toast("完成")
 }
 
 // ===== 出貨查詢 =====
-async function renderShipQuery(){
-  app.innerHTML=`
-  <h3>出貨查詢</h3>
-  <input id="search" placeholder="搜尋產品" oninput="filter()">
-  <div id="result"></div>
-  `
-  loadOrders()
-}
-
-let orderData=[]
-
-async function loadOrders(){
+async function shipQuery(){
   const r=await fetch('/api/orders')
   const j=await r.json()
-  orderData=j.items
-  filter()
+  app.innerHTML=j.items.map(x=>`<div>${x.product}</div>`).join("")
 }
 
-function filter(){
-  const k=search.value
-  result.innerHTML=
-    orderData
-    .filter(x=>x.product.includes(k))
-    .map(x=>`<div>${x.product}-${x.qty}</div>`)
-    .join("")
-}
-
-// ===== 倉庫（A/B）=====
+// ===== 倉庫 =====
 let dragItem=null
 
-async function renderWarehouse(){
+async function warehouse(){
   const r=await fetch('/api/w')
   const d=await r.json()
-
   const map={}
   d.forEach(i=>map[i[2]]=i[0])
 
-  let html='<h3>A區</h3><div class="grid">'
-  for(let i=1;i<=50;i++){
+  let h=''
+  for(let i=1;i<=20;i++){
     let loc="A-"+i,p=map[loc]||""
-    html+=cellHTML(loc,p,"zoneA")
+    h+=`<div draggable="true" ondragstart="drag('${p}')" 
+    ondrop="drop('${loc}')" ondragover="event.preventDefault()">
+    ${loc}-${p}</div>`
   }
-  html+='</div><h3>B區</h3><div class="grid">'
-  for(let i=1;i<=50;i++){
-    let loc="B-"+i,p=map[loc]||""
-    html+=cellHTML(loc,p,"zoneB")
-  }
-  html+='</div>'
-
-  app.innerHTML=html
-}
-
-function cellHTML(loc,p,zone){
-  return `
-  <div class="cell ${p?'used':'empty'} ${zone}"
-    ondragover="event.preventDefault()"
-    ondrop="drop('${loc}')">
-    <div draggable="true" ondragstart="drag('${p}')">${loc}<br>${p}</div>
-  </div>`
+  app.innerHTML=h
 }
 
 function drag(p){dragItem=p}
-
 async function drop(l){
-  if(!dragItem)return
   await fetch('/api/move',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({p:dragItem,l:l})
+    body:JSON.stringify({p:dragItem,l})
   })
-  toast("移動完成")
-  renderWarehouse()
+  warehouse()
 }
 
-// ===== 客戶（可編輯）=====
-let customers=[]
-
-async function renderCustomers(){
-  app.innerHTML=`
-  <h3>客戶資料</h3>
-  <input id="cname"><button onclick="addCustomer()">新增</button>
-  <div id="clist"></div>
-  `
-  loadCustomers()
-}
-
-async function loadCustomers(){
+// ===== 客戶 =====
+async function customers(){
   const r=await fetch('/api/customers')
   const j=await r.json()
-  customers=j.items
-  drawCustomers()
-}
-
-function drawCustomers(){
-  clist.innerHTML=
-    customers.map((c,i)=>`
-      <div>
-        <input value="${c.name}" onchange="editCustomer(${i},this.value)">
-        <button onclick="delCustomer('${c.name}')">刪除</button>
-      </div>
-    `).join("")
-}
-
-async function addCustomer(){
-  await fetch('/api/customers',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({name:cname.value})
-  })
-  loadCustomers()
-}
-
-async function editCustomer(i,v){
-  await fetch('/api/customers/edit',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({old:customers[i].name,new:v})
-  })
-}
-
-async function delCustomer(n){
-  await fetch('/api/customers/del',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({name:n})
-  })
-  loadCustomers()
+  app.innerHTML=j.items.map(x=>`<div>${x.name}</div>`).join("")
 }
 
 // ===== 異動 =====
-async function renderActivity(){
+async function activity(){
   const r=await fetch('/api/activity')
   const j=await r.json()
-  app.innerHTML=
-    "<h3>異動</h3>"+
-    j.items.map(x=>`<div>👤${x.user} ${x.action}</div>`).join("")
+  app.innerHTML=j.items.map(x=>`<div>${x.action}</div>`).join("")
 }
 
 </script>
-
 </body>
 </html>
